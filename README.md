@@ -68,6 +68,11 @@ python -m src.backfill --start 2018-01-01
 
 # 증분
 python -m src.daily
+
+# 분석 대시보드 생성
+python -m src.dashboard                         # → data/dashboard.html
+python -m src.dashboard --risk-free 4.0          # 무위험수익률 변경
+python -m src.dashboard --top-drawdowns 10       # 하락 이벤트 표시 개수
 ```
 
 ## DB 스키마

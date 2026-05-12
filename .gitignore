@@ -3,5 +3,6 @@ __pycache__/
 .venv/
 .env
 smoke_response.html
+data/dashboard.html
 *.swp
 .DS_Store
