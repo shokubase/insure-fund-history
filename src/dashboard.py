@@ -402,15 +402,29 @@ HTML_TEMPLATE = """\
   <p class="fund-meta">펀드를 선택하고 비중을 입력한 뒤 분석 버튼을 클릭하세요</p>
   <div class="portfolio-controls">
     <div id="fund-selector"></div>
-    <div class="weight-sum" id="weight-sum">비중 합계: 0%</div>
+    <div style="margin:0.8rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+      <div class="weight-sum" id="weight-sum" style="margin:0;">비중 합계: 0%</div>
+      <span style="color:#888;">|</span>
+      <div style="font-size:0.85rem;display:flex;align-items:center;gap:0.5rem;">
+        <label>시작일 <input type="date" id="pf-start" style="padding:0.3rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;"></label>
+        <label>종료일 <input type="date" id="pf-end" style="padding:0.3rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;"></label>
+      </div>
+      <span id="pf-date-info" style="font-size:0.8rem;color:#888;"></span>
+    </div>
     <button class="btn-analyze" id="btn-analyze" disabled>포트폴리오 분석</button>
   </div>
   <div id="portfolio-results" style="display:none">
     <div class="metrics-grid" id="pf-metrics"></div>
     <div class="chart-row">
-      <div class="chart-container"><canvas id="pf-nav-chart"></canvas></div>
+      <div class="chart-container" style="position:relative;">
+        <canvas id="pf-nav-chart"></canvas>
+        <div id="pf-selection-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(37,99,235,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
+        <div id="pf-selection-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;"></div>
+      </div>
       <div class="chart-container"><canvas id="pf-dd-chart"></canvas></div>
     </div>
+    <p style="font-size:0.75rem;color:#999;margin-top:-1rem;margin-bottom:1rem;">NAV 차트에서 드래그하여 구간 분석 (클릭하면 해제)</p>
+    <div id="pf-trailing"></div>
     <div id="pf-dd-table"></div>
     <div id="pf-ls-table"></div>
     <div id="pf-corr-table"></div>
@@ -516,6 +530,7 @@ function toggleCurrency(btn) {
 (function buildCorrSelector() {
   const container = document.getElementById('corr-selector');
   const corrCurrencyState = {};
+  FUNDS.forEach((f, i) => { if (f.hasKrw) corrCurrencyState[i] = 'krw'; });
 
   FUNDS.forEach((fund, idx) => {
     const chip = document.createElement('label');
@@ -529,8 +544,8 @@ function toggleCurrency(btn) {
       toggle.className = 'currency-toggle';
       toggle.style.cssText = 'margin:0 0 0 0.3rem;display:inline-flex;';
       toggle.innerHTML =
-        `<button class="btn-currency active" data-idx="${idx}" data-mode="usd" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:4px 0 0 4px;">$</button>` +
-        `<button class="btn-currency" data-idx="${idx}" data-mode="krw" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:0 4px 4px 0;border-left:none;">₩</button>`;
+        `<button class="btn-currency" data-idx="${idx}" data-mode="usd" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:4px 0 0 4px;">$</button>` +
+        `<button class="btn-currency active" data-idx="${idx}" data-mode="krw" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:0 4px 4px 0;border-left:none;">₩</button>`;
       toggle.querySelectorAll('.btn-currency').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.preventDefault(); e.stopPropagation();
@@ -626,8 +641,8 @@ function toggleCurrency(btn) {
     row.className = 'fund-row';
     const krwToggle = fund.hasKrw
       ? `<span class="currency-toggle" style="margin:0;">` +
-        `<button class="btn-currency active" data-idx="${idx}" data-mode="usd" onclick="togglePfCurrency(this)" style="padding:0.2rem 0.5rem;font-size:0.75rem;">USD</button>` +
-        `<button class="btn-currency" data-idx="${idx}" data-mode="krw" onclick="togglePfCurrency(this)" style="padding:0.2rem 0.5rem;font-size:0.75rem;">KRW</button></span>`
+        `<button class="btn-currency" data-idx="${idx}" data-mode="usd" onclick="togglePfCurrency(this)" style="padding:0.2rem 0.5rem;font-size:0.75rem;">USD</button>` +
+        `<button class="btn-currency active" data-idx="${idx}" data-mode="krw" onclick="togglePfCurrency(this)" style="padding:0.2rem 0.5rem;font-size:0.75rem;">KRW</button></span>`
       : '';
     row.innerHTML = `
       <label><input type="checkbox" data-idx="${idx}">
@@ -652,6 +667,7 @@ function toggleCurrency(btn) {
 
 // Per-fund currency mode for portfolio
 const pfFundCurrency = {};
+FUNDS.forEach((f, i) => { if (f.hasKrw) pfFundCurrency[i] = 'krw'; });
 function togglePfCurrency(btn) {
   const idx = btn.dataset.idx;
   const mode = btn.dataset.mode;
@@ -682,6 +698,29 @@ function updateWeightSum() {
   el.textContent = `비중 합계: ${sum.toFixed(1)}%`;
   el.className = 'weight-sum' + (Math.abs(sum - 100) > 0.1 ? ' warn' : '');
   document.getElementById('btn-analyze').disabled = sel.length === 0 || Math.abs(sum - 100) > 0.1;
+
+  // Update common date range info
+  const info = document.getElementById('pf-date-info');
+  const startInput = document.getElementById('pf-start');
+  const endInput = document.getElementById('pf-end');
+  if (sel.length === 0) {
+    info.textContent = '';
+    startInput.value = ''; endInput.value = '';
+    startInput.min = ''; startInput.max = '';
+    endInput.min = ''; endInput.max = '';
+    return;
+  }
+  const dailySets = sel.map(s => getPfFundData(FUNDS[s.idx], s.idx, 'daily'));
+  const dateSets = dailySets.map(d => new Set(d.dates));
+  const common = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
+  if (common.length === 0) { info.textContent = '공통 기간 없음'; return; }
+  const earliest = common[0];
+  const latest = common[common.length - 1];
+  info.textContent = `공통 기간: ${earliest} ~ ${latest}`;
+  startInput.min = earliest; startInput.max = latest;
+  endInput.min = earliest; endInput.max = latest;
+  if (!startInput.value || startInput.value < earliest) startInput.value = earliest;
+  if (!endInput.value || endInput.value > latest) endInput.value = latest;
 }
 
 // Build portfolio NAV from weighted daily returns
@@ -690,6 +729,12 @@ function buildPortfolio(selections) {
   const dailySets = selections.map(s => getPfFundData(FUNDS[s.idx], s.idx, 'daily'));
   const dateSets = dailySets.map(d => new Set(d.dates));
   let commonDates = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
+
+  // Apply user date range filter
+  const startDate = document.getElementById('pf-start').value;
+  const endDate = document.getElementById('pf-end').value;
+  if (startDate) commonDates = commonDates.filter(d => d >= startDate);
+  if (endDate) commonDates = commonDates.filter(d => d <= endDate);
 
   // Build date→return lookup per fund
   const lookups = dailySets.map(f => {
@@ -821,8 +866,128 @@ function calcLsDca(nav, dates, windowMonths) {
   return { window: windowMonths, observations: advantages.length, winRate, mlsa, mlsd };
 }
 
+// Rolling trailing return analysis
+let trailingChart = null;
+
+function renderTrailingReturns(dates, nav) {
+  const el = document.getElementById('pf-trailing');
+  const n = nav.length;
+  if (n < 2) { el.innerHTML = ''; return; }
+
+  const totalYears = (new Date(dates[n-1]) - new Date(dates[0])) / (365.25 * 86400000);
+  const maxWindow = Math.floor(totalYears);
+  if (maxWindow < 1) { el.innerHTML = ''; return; }
+
+  // Build date lookup: date string → index
+  const dateIdx = {};
+  dates.forEach((d, i) => { dateIdx[d] = i; });
+
+  // Build buttons
+  const windows = [];
+  for (let y = 1; y <= Math.min(maxWindow, 10); y++) windows.push(y);
+
+  const chips = windows.map(y =>
+    `<label class="filter-chip${y === 1 ? ' active' : ''}" data-window="${y}"><input type="radio" name="trailing-window" value="${y}" ${y === 1 ? 'checked' : ''} style="display:none">${y}Y</label>`
+  ).join('');
+
+  el.innerHTML = `
+    <h3>Rolling Trailing Returns</h3>
+    <div class="filter-chips" id="trailing-chips" style="margin-bottom:1rem;">${chips}</div>
+    <div class="metrics-grid" id="trailing-metrics"></div>
+    <div class="chart-container" style="height:250px;"><canvas id="trailing-chart"></canvas></div>`;
+
+  function calcRolling(windowYears) {
+    const returns = [];
+    const returnDates = [];
+    for (let i = 0; i < n; i++) {
+      const startDate = new Date(dates[i]);
+      const endDate = new Date(startDate);
+      endDate.setFullYear(endDate.getFullYear() + windowYears);
+      const endStr = endDate.toISOString().slice(0, 10);
+
+      // Find closest date >= endStr
+      let ei = -1;
+      for (let j = i + 1; j < n; j++) {
+        if (dates[j] >= endStr) { ei = j; break; }
+      }
+      if (ei < 0) break;
+
+      const r = (Math.pow(nav[ei] / nav[i], 1 / windowYears) - 1) * 100; // annualized
+      returns.push(r);
+      returnDates.push(dates[i]);
+    }
+    return { returns, dates: returnDates };
+  }
+
+  function showRolling(windowYears) {
+    const { returns, dates: rDates } = calcRolling(windowYears);
+    if (returns.length === 0) return;
+
+    const avg = returns.reduce((s,v) => s+v, 0) / returns.length;
+    const variance = returns.reduce((s,v) => s + (v-avg)**2, 0) / (returns.length - 1);
+    const std = Math.sqrt(variance);
+    const se = std / Math.sqrt(returns.length);
+    const min = Math.min(...returns);
+    const max = Math.max(...returns);
+    const median = [...returns].sort((a,b) => a-b)[Math.floor(returns.length / 2)];
+    const positive = returns.filter(r => r > 0).length;
+    const winRate = (positive / returns.length * 100);
+
+    const pctCls = v => v > 0 ? 'positive' : v < 0 ? 'negative' : '';
+    const fmtPct = (v, sign) => (sign && v > 0 ? '+' : '') + v.toFixed(2) + '%';
+
+    document.getElementById('trailing-metrics').innerHTML = `
+      <div class="metric-card"><div class="label">관측수</div><div class="value">${returns.length}</div></div>
+      <div class="metric-card"><div class="label">평균 CAGR</div><div class="value ${pctCls(avg)}">${fmtPct(avg, true)}</div></div>
+      <div class="metric-card"><div class="label">중앙값</div><div class="value ${pctCls(median)}">${fmtPct(median, true)}</div></div>
+      <div class="metric-card"><div class="label">표준편차</div><div class="value">${std.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">표준오차</div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">최소</div><div class="value ${pctCls(min)}">${fmtPct(min, true)}</div></div>
+      <div class="metric-card"><div class="label">최대</div><div class="value ${pctCls(max)}">${fmtPct(max, true)}</div></div>
+      <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate > 50 ? 'positive' : 'negative'}">${winRate.toFixed(1)}%</div></div>`;
+
+    // Chart: rolling return over time
+    const step = Math.max(1, Math.floor(rDates.length / 400));
+    const cDates = rDates.filter((_, i) => i % step === 0);
+    const cReturns = returns.filter((_, i) => i % step === 0);
+
+    if (trailingChart) trailingChart.destroy();
+    trailingChart = new Chart(document.getElementById('trailing-chart'), {
+      type: 'line',
+      data: { labels: cDates, datasets: [
+        { label: windowYears + 'Y CAGR (%)', data: cReturns.map(v => +v.toFixed(2)),
+          borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
+          fill: true, pointRadius: 0, borderWidth: 1.5 },
+        { label: '평균', data: cDates.map(() => +avg.toFixed(2)),
+          borderColor: '#888', borderDash: [5, 5], pointRadius: 0, borderWidth: 1 },
+        { label: '0%', data: cDates.map(() => 0),
+          borderColor: '#dc2626', borderDash: [3, 3], pointRadius: 0, borderWidth: 1 },
+      ]},
+      options: { responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } },
+          y: { ticks: { callback: v => v + '%' } }
+        },
+        plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } }
+      }
+    });
+  }
+
+  // Wire up chips
+  el.querySelectorAll('#trailing-chips .filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      el.querySelectorAll('#trailing-chips .filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      showRolling(+chip.dataset.window);
+    });
+  });
+
+  showRolling(1); // default
+}
+
 // Render portfolio results
 let pfNavChart = null, pfDdChart = null;
+let pfFullDates = [], pfFullNav = []; // full (non-downsampled) data for selection analysis
 
 function renderPortfolio(pf) {
   const m = calcMetrics(pf.dates, pf.nav);
@@ -855,6 +1020,13 @@ function renderPortfolio(pf) {
     <div class="metric-card"><div class="label">MDD</div><div class="value negative">${m.mdd}%</div></div>
     <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-${avgDd}%</div></div>
     <div class="metric-card"><div class="label">최장 하락 기간</div><div class="value">${longestDays}일</div></div>`;
+
+  // Store full data for drag-selection analysis
+  pfFullDates = pf.dates;
+  pfFullNav = pf.nav;
+
+  // Trailing returns
+  renderTrailingReturns(pf.dates, pf.nav);
 
   // Charts (downsample)
   const step = Math.max(1, Math.floor(pf.dates.length / 500));
@@ -996,7 +1168,106 @@ document.getElementById('btn-analyze').addEventListener('click', () => {
   const pf = buildPortfolio(sel);
   renderPortfolio(pf);
   renderCorrelation(sel);
+  clearSelection();
 });
+
+// ── Drag-to-select on portfolio NAV chart ──
+const overlay = document.getElementById('pf-selection-overlay');
+const statsBox = document.getElementById('pf-selection-stats');
+let dragStart = null, isDragging = false;
+
+function getDateFromX(chart, x) {
+  const scale = chart.scales.x;
+  const val = scale.getValueForPixel(x);
+  return new Date(val).toISOString().slice(0, 10);
+}
+
+function clearSelection() {
+  overlay.style.display = 'none';
+  statsBox.style.display = 'none';
+  dragStart = null;
+  isDragging = false;
+}
+
+function showSelectionStats(startDate, endDate) {
+  // Find indices in full data
+  let si = pfFullDates.findIndex(d => d >= startDate);
+  let ei = pfFullDates.length - 1;
+  for (let i = pfFullDates.length - 1; i >= 0; i--) {
+    if (pfFullDates[i] <= endDate) { ei = i; break; }
+  }
+  if (si < 0 || si >= ei || ei - si < 2) { statsBox.style.display = 'none'; return; }
+
+  const dates = pfFullDates.slice(si, ei + 1);
+  const nav = pfFullNav.slice(si, ei + 1);
+  const n = nav.length;
+  const totalDays = (new Date(dates[n-1]) - new Date(dates[0])) / 86400000;
+  const totalYears = totalDays / 365.25;
+
+  const totalReturn = ((nav[n-1] / nav[0] - 1) * 100).toFixed(2);
+  const cagr = totalYears > 0 ? ((Math.pow(nav[n-1] / nav[0], 1/totalYears) - 1) * 100).toFixed(2) : '-';
+
+  const dr = [];
+  for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i-1] - 1);
+  const mean = dr.reduce((s,v) => s+v, 0) / dr.length;
+  const variance = dr.reduce((s,v) => s + (v-mean)**2, 0) / (dr.length - 1);
+  const af = totalYears > 0 ? dr.length / totalYears : 252;
+  const vol = (Math.sqrt(variance) * Math.sqrt(af) * 100).toFixed(2);
+
+  let peak = nav[0];
+  let mdd = 0;
+  for (const v of nav) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v - peak) / peak); }
+  const mddPct = (mdd * 100).toFixed(2);
+
+  const pctCls = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
+
+  statsBox.innerHTML =
+    `<div style="font-weight:600;margin-bottom:0.3rem;">${dates[0]} ~ ${dates[n-1]}</div>` +
+    `<div>수익률: <b class="${pctCls(totalReturn)}">${+totalReturn > 0 ? '+' : ''}${totalReturn}%</b></div>` +
+    `<div>CAGR: <b class="${pctCls(cagr)}">${+cagr > 0 ? '+' : ''}${cagr}%</b></div>` +
+    `<div>변동성: <b>${vol}%</b></div>` +
+    `<div>MDD: <b class="negative">${mddPct}%</b></div>`;
+  statsBox.style.display = 'block';
+}
+
+// Attach mouse events to the NAV chart canvas
+const navCanvas = document.getElementById('pf-nav-chart');
+navCanvas.addEventListener('mousedown', (e) => {
+  if (!pfNavChart) return;
+  const rect = navCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const area = pfNavChart.chartArea;
+  if (x < area.left || x > area.right) return;
+  dragStart = x;
+  isDragging = true;
+  overlay.style.display = 'block';
+  overlay.style.left = x + 'px';
+  overlay.style.width = '0px';
+  statsBox.style.display = 'none';
+});
+
+navCanvas.addEventListener('mousemove', (e) => {
+  if (!isDragging || !pfNavChart) return;
+  const rect = navCanvas.getBoundingClientRect();
+  const x = Math.max(pfNavChart.chartArea.left, Math.min(e.clientX - rect.left, pfNavChart.chartArea.right));
+  const left = Math.min(dragStart, x);
+  const width = Math.abs(x - dragStart);
+  overlay.style.left = left + 'px';
+  overlay.style.width = width + 'px';
+});
+
+navCanvas.addEventListener('mouseup', (e) => {
+  if (!isDragging || !pfNavChart) return;
+  isDragging = false;
+  const rect = navCanvas.getBoundingClientRect();
+  const x = Math.max(pfNavChart.chartArea.left, Math.min(e.clientX - rect.left, pfNavChart.chartArea.right));
+  if (Math.abs(x - dragStart) < 5) { clearSelection(); return; }
+  const d1 = getDateFromX(pfNavChart, Math.min(dragStart, x));
+  const d2 = getDateFromX(pfNavChart, Math.max(dragStart, x));
+  showSelectionStats(d1, d2);
+});
+
+navCanvas.addEventListener('mouseleave', () => { if (isDragging) isDragging = false; });
 </script>
 </body>
 </html>
@@ -1083,17 +1354,18 @@ def render_fund_section(fund: dict, idx: int) -> str:
     if has_krw:
         toggle_html = f"""\
   <div class="currency-toggle" style="margin-bottom:1rem;">
-    <button class="btn-currency active" data-target="fund-{idx}-usd" data-pair="fund-{idx}-krw" onclick="toggleCurrency(this)">USD</button>
-    <button class="btn-currency" data-target="fund-{idx}-krw" data-pair="fund-{idx}-usd" onclick="toggleCurrency(this)">KRW 환산</button>
+    <button class="btn-currency" data-target="fund-{idx}-usd" data-pair="fund-{idx}-krw" onclick="toggleCurrency(this)">USD</button>
+    <button class="btn-currency active" data-target="fund-{idx}-krw" data-pair="fund-{idx}-usd" onclick="toggleCurrency(this)">KRW 환산</button>
   </div>"""
 
     usd_block = _render_analysis_block(fund, f"chart-{idx}-usd")
-    usd_div = f'<div id="fund-{idx}-usd">{usd_block}</div>'
+    usd_style = ' style="display:none"' if has_krw else ''
+    usd_div = f'<div id="fund-{idx}-usd"{usd_style}>{usd_block}</div>'
 
     krw_div = ""
     if has_krw:
         krw_block = _render_analysis_block(fund["krw"], f"chart-{idx}-krw")
-        krw_div = f'<div id="fund-{idx}-krw" style="display:none">{krw_block}</div>'
+        krw_div = f'<div id="fund-{idx}-krw">{krw_block}</div>'
 
     return f"""\
 <section class="fund-section hidden" id="fund-{idx}">
