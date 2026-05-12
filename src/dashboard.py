@@ -384,6 +384,13 @@ HTML_TEMPLATE = """\
   </div>
 </div>
 
+<!-- Asset Comparison -->
+<section class="fund-section" id="comparison-section" style="display:none;">
+  <h2>자산 비교</h2>
+  <p class="fund-meta" id="comparison-meta"></p>
+  <div class="chart-container" style="height:400px;"><canvas id="comparison-chart"></canvas></div>
+</section>
+
 %%FUND_SECTIONS%%
 
 <!-- Correlation Matrix Analyzer -->
@@ -436,23 +443,46 @@ const FUNDS = %%FUND_JSON%%;
 const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 
 // ── Asset Filter ──
+const filterCurrencyState = {};
+FUNDS.forEach((f, i) => { if (f.hasKrw) filterCurrencyState[i] = 'krw'; });
+
 (function buildFilter() {
   const container = document.getElementById('filter-chips');
   FUNDS.forEach((fund, idx) => {
     const chip = document.createElement('label');
     chip.className = 'filter-chip';
     chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${fund.shortName || fund.name}`;
-    chip.addEventListener('click', () => {
+
+    if (fund.hasKrw) {
+      const toggle = document.createElement('span');
+      toggle.className = 'currency-toggle';
+      toggle.style.cssText = 'margin:0 0 0 0.3rem;display:inline-flex;';
+      toggle.innerHTML =
+        `<button class="btn-currency" data-idx="${idx}" data-mode="usd" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:4px 0 0 4px;">$</button>` +
+        `<button class="btn-currency active" data-idx="${idx}" data-mode="krw" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:0 4px 4px 0;border-left:none;">₩</button>`;
+      toggle.querySelectorAll('.btn-currency').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          filterCurrencyState[idx] = btn.dataset.mode;
+          toggle.querySelectorAll('.btn-currency').forEach(b => b.classList.toggle('active', b === btn));
+          updateComparison();
+        });
+      });
+      chip.appendChild(toggle);
+    }
+
+    chip.addEventListener('click', (e) => {
+      if (e.target.classList.contains('btn-currency')) return;
       setTimeout(() => {
         const checked = chip.querySelector('input').checked;
         chip.classList.toggle('active', checked);
         const section = document.getElementById('fund-' + idx);
         if (section) section.classList.toggle('hidden', !checked);
-        // Lazy-init charts on first show
         if (checked && !section._chartsCreated) {
           createSingleChart(idx);
           section._chartsCreated = true;
         }
+        updateComparison();
       }, 0);
     });
     container.appendChild(chip);
@@ -468,6 +498,7 @@ const RISK_FREE = %%RISK_FREE_DECIMAL%%;
         if (!section._chartsCreated) { createSingleChart(+idx); section._chartsCreated = true; }
       }
     });
+    updateComparison();
   });
 
   document.getElementById('filter-none').addEventListener('click', () => {
@@ -477,8 +508,84 @@ const RISK_FREE = %%RISK_FREE_DECIMAL%%;
       const section = document.getElementById('fund-' + cb.dataset.idx);
       if (section) section.classList.add('hidden');
     });
+    updateComparison();
   });
 })();
+
+// ── Asset Comparison Chart ──
+const COMPARISON_COLORS = ['#2563eb','#dc2626','#16a34a','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1','#14b8a6'];
+let comparisonChart = null;
+
+function updateComparison() {
+  const section = document.getElementById('comparison-section');
+  const selected = [];
+  document.querySelectorAll('#filter-chips .filter-chip input:checked').forEach(cb => {
+    selected.push(+cb.dataset.idx);
+  });
+
+  if (selected.length < 2) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  // Find common date range (respecting per-asset currency toggle)
+  const dailySets = selected.map(idx => {
+    const fund = FUNDS[idx];
+    if (filterCurrencyState[idx] === 'krw' && fund.krw) return fund.krw.daily;
+    if (filterCurrencyState[idx] === 'usd') return fund.daily;
+    return (fund.hasKrw && fund.krw) ? fund.krw.daily : fund.daily;
+  });
+  const dateSets = dailySets.map(d => new Set(d.dates));
+  const common = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
+
+  if (common.length < 2) { section.style.display = 'none'; return; }
+
+  // Build NAV series normalized to 100 at start
+  const datasets = selected.map((idx, si) => {
+    const lookup = {};
+    dailySets[si].dates.forEach((d, i) => { lookup[d] = dailySets[si].returns[i]; });
+    const nav = [100];
+    for (let i = 0; i < common.length; i++) {
+      nav.push(nav[nav.length - 1] * (1 + (lookup[common[i]] || 0)));
+    }
+    // nav has length common.length+1, dates need synthetic first date
+    return nav;
+  });
+
+  const firstDate = new Date(common[0]);
+  firstDate.setDate(firstDate.getDate() - 1);
+  const chartDates = [firstDate.toISOString().slice(0, 10), ...common];
+
+  // Downsample
+  const step = Math.max(1, Math.floor(chartDates.length / 600));
+  const dsDates = chartDates.filter((_, i) => i % step === 0);
+
+  document.getElementById('comparison-meta').textContent =
+    `공통 기간: ${common[0]} ~ ${common[common.length-1]} | 시작점 = 100으로 정규화`;
+
+  const chartDatasets = selected.map((idx, si) => {
+    const dsNav = datasets[si].filter((_, i) => i % step === 0);
+    return {
+      label: FUNDS[idx].shortName || FUNDS[idx].name,
+      data: dsNav.map(v => +v.toFixed(2)),
+      borderColor: COMPARISON_COLORS[si % COMPARISON_COLORS.length],
+      backgroundColor: 'transparent',
+      fill: false, pointRadius: 0, borderWidth: 1.8,
+    };
+  });
+
+  if (comparisonChart) comparisonChart.destroy();
+  comparisonChart = new Chart(document.getElementById('comparison-chart'), {
+    type: 'line',
+    data: { labels: dsDates, datasets: chartDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 10 } },
+        y: { beginAtZero: false }
+      },
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 11 } } } }
+    }
+  });
+}
 
 function renderChart(canvasId, labels, data, color, opts) {
   const ctx = document.getElementById(canvasId);
