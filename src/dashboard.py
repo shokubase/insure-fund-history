@@ -213,16 +213,11 @@ def compute_correlation_matrix(conn, funds: list[dict]) -> dict | None:
 # Analyze one fund
 # ---------------------------------------------------------------------------
 
-def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
-                 risk_free: float, top_n: int) -> dict | None:
-    nav = load_nav_series(conn, member_cd, fund_cd)
-    if len(nav) < 30:
-        logger.warning("Skipping %s: only %d data points", fund_cd, len(nav))
-        return None
-
+def _build_series_data(nav: pd.Series, risk_free: float, top_n: int) -> dict:
+    """NAV 시계열에서 모든 분석 데이터를 생성."""
     basic = compute_basic_metrics(nav, risk_free)
     events = find_drawdown_events(nav)
-    dd_summary = drawdown_summary(events)
+    dd_summary_data = drawdown_summary(events)
     top_events = events[:top_n]
 
     ls_dca = []
@@ -231,7 +226,6 @@ def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
         if result:
             ls_dca.append(result)
 
-    # Chart data (downsample to ~500 points)
     step = max(1, len(nav) // 500)
     chart_nav = nav.iloc[::step]
     cummax = nav.cummax()
@@ -243,24 +237,46 @@ def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
         "drawdown": [round(v * 100, 2) for v in dd_series.values],
     }
 
-    # Full daily return data for portfolio analyzer (JS-side computation)
     daily_returns = nav.pct_change().dropna()
     daily_data = {
         "dates": [d.strftime("%Y-%m-%d") for d in daily_returns.index],
         "returns": [round(v, 8) for v in daily_returns.values],
     }
 
+    monthly_nav = nav.resample("ME").last().dropna()
+    monthly_returns = monthly_nav.pct_change().dropna()
+    monthly_data = {
+        "dates": [d.strftime("%Y-%m-%d") for d in monthly_returns.index],
+        "returns": [round(v, 8) for v in monthly_returns.values],
+    }
+
     return {
-        "name": name,
-        "member_cd": member_cd,
-        "fund_cd": fund_cd,
         "basic": basic,
-        "dd_summary": dd_summary,
+        "dd_summary": dd_summary_data,
         "top_events": top_events,
         "ls_dca": ls_dca,
         "chart": chart_data,
         "daily": daily_data,
+        "monthly": monthly_data,
     }
+
+
+def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
+                 risk_free: float, top_n: int,
+                 krw_nav: pd.Series | None = None) -> dict | None:
+    nav = load_nav_series(conn, member_cd, fund_cd)
+    if len(nav) < 30:
+        logger.warning("Skipping %s: only %d data points", fund_cd, len(nav))
+        return None
+
+    result = _build_series_data(nav, risk_free, top_n)
+    result.update({"name": name, "member_cd": member_cd, "fund_cd": fund_cd,
+                   "has_krw": krw_nav is not None})
+
+    if krw_nav is not None and len(krw_nav) >= 30:
+        result["krw"] = _build_series_data(krw_nav, risk_free, top_n)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +337,14 @@ HTML_TEMPLATE = """\
                            padding: 0.3rem 0.8rem; font-size: 0.8rem; cursor: pointer; color: #666; }
   .filter-actions button:hover { border-color: var(--accent); color: var(--accent); }
   .fund-section.hidden { display: none; }
+
+  /* Currency toggle */
+  .currency-toggle { display: flex; gap: 0; }
+  .btn-currency { background: var(--bg); border: 1px solid var(--border); padding: 0.4rem 1rem;
+                   font-size: 0.85rem; cursor: pointer; color: #666; transition: all 0.15s; }
+  .btn-currency:first-child { border-radius: 6px 0 0 6px; }
+  .btn-currency:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .btn-currency.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   /* Correlation matrix */
   .corr-table { width: auto; margin: 0 auto 1rem; }
@@ -432,37 +456,50 @@ const RISK_FREE = %%RISK_FREE_DECIMAL%%;
   });
 })();
 
+function renderChart(canvasId, labels, data, color, opts) {
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: [{
+      label: opts.label || '', data,
+      borderColor: color, backgroundColor: opts.bg || 'rgba(0,0,0,0.08)',
+      fill: true, pointRadius: 0, borderWidth: 1.5,
+    }]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } },
+        y: opts.yOpts || { beginAtZero: false }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
 function createSingleChart(idx) {
   const fund = FUNDS[idx];
-  const navCtx = document.getElementById('nav-chart-' + idx);
-  const ddCtx = document.getElementById('dd-chart-' + idx);
-  if (!navCtx || !ddCtx) return;
+  // USD charts
+  renderChart(`chart-${idx}-usd-nav`, fund.chart.dates, fund.chart.nav,
+    '#2563eb', { label: '기준가', bg: 'rgba(37,99,235,0.08)' });
+  renderChart(`chart-${idx}-usd-dd`, fund.chart.dates, fund.chart.drawdown,
+    '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+  // KRW charts (if available)
+  if (fund.krw) {
+    renderChart(`chart-${idx}-krw-nav`, fund.krw.chart.dates, fund.krw.chart.nav,
+      '#2563eb', { label: '기준가 (KRW)', bg: 'rgba(37,99,235,0.08)' });
+    renderChart(`chart-${idx}-krw-dd`, fund.krw.chart.dates, fund.krw.chart.drawdown,
+      '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+  }
+}
 
-  new Chart(navCtx, {
-    type: 'line',
-    data: { labels: fund.chart.dates, datasets: [{
-      label: '기준가 (원)', data: fund.chart.nav,
-      borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
-      fill: true, pointRadius: 0, borderWidth: 1.5,
-    }]},
-    options: { responsive: true, maintainAspectRatio: false,
-      scales: { x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } },
-      plugins: { legend: { display: false } }
-    }
-  });
-
-  new Chart(ddCtx, {
-    type: 'line',
-    data: { labels: fund.chart.dates, datasets: [{
-      label: '드로다운 (%)', data: fund.chart.drawdown,
-      borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,0.15)',
-      fill: true, pointRadius: 0, borderWidth: 1.5,
-    }]},
-    options: { responsive: true, maintainAspectRatio: false,
-      scales: { x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } }, y: { max: 0 } },
-      plugins: { legend: { display: false } }
-    }
-  });
+function toggleCurrency(btn) {
+  const target = document.getElementById(btn.dataset.target);
+  const pair = document.getElementById(btn.dataset.pair);
+  if (!target || !pair) return;
+  target.style.display = '';
+  pair.style.display = 'none';
+  btn.classList.add('active');
+  btn.parentElement.querySelectorAll('.btn-currency').forEach(b => { if (b !== btn) b.classList.remove('active'); });
 }
 
 // ── Portfolio Analyzer ──
@@ -473,9 +510,15 @@ function createSingleChart(idx) {
   FUNDS.forEach((fund, idx) => {
     const row = document.createElement('div');
     row.className = 'fund-row';
+    const krwToggle = fund.hasKrw
+      ? `<span class="currency-toggle" style="margin:0;">` +
+        `<button class="btn-currency active" data-idx="${idx}" data-mode="usd" onclick="togglePfCurrency(this)" style="padding:0.2rem 0.5rem;font-size:0.75rem;">USD</button>` +
+        `<button class="btn-currency" data-idx="${idx}" data-mode="krw" onclick="togglePfCurrency(this)" style="padding:0.2rem 0.5rem;font-size:0.75rem;">KRW</button></span>`
+      : '';
     row.innerHTML = `
       <label><input type="checkbox" data-idx="${idx}">
         <span>${fund.name}</span></label>
+      ${krwToggle}
       <input type="range" min="0" max="100" value="0" data-idx="${idx}">
       <input type="number" min="0" max="100" value="0" data-idx="${idx}" style="width:70px"> %`;
     container.appendChild(row);
@@ -492,6 +535,20 @@ function createSingleChart(idx) {
     num.addEventListener('input', () => { slider.value = num.value; cb.checked = +num.value > 0; updateWeightSum(); });
   });
 })();
+
+// Per-fund currency mode for portfolio
+const pfFundCurrency = {};
+function togglePfCurrency(btn) {
+  const idx = btn.dataset.idx;
+  const mode = btn.dataset.mode;
+  pfFundCurrency[idx] = mode;
+  btn.parentElement.querySelectorAll('.btn-currency').forEach(b => b.classList.toggle('active', b === btn));
+}
+
+function getPfFundData(fund, idx, key) {
+  if (pfFundCurrency[idx] === 'krw' && fund.krw && fund.krw[key]) return fund.krw[key];
+  return fund[key];
+}
 
 function getSelections() {
   const rows = document.querySelectorAll('#fund-selector .fund-row');
@@ -515,13 +572,13 @@ function updateWeightSum() {
 
 // Build portfolio NAV from weighted daily returns
 function buildPortfolio(selections) {
-  // Find common date range
-  const dateSets = selections.map(s => new Set(FUNDS[s.idx].daily.dates));
+  // Find common date range (respecting per-fund currency mode)
+  const dailySets = selections.map(s => getPfFundData(FUNDS[s.idx], s.idx, 'daily'));
+  const dateSets = dailySets.map(d => new Set(d.dates));
   let commonDates = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
 
   // Build date→return lookup per fund
-  const lookups = selections.map(s => {
-    const f = FUNDS[s.idx].daily;
+  const lookups = dailySets.map(f => {
     const m = {};
     f.dates.forEach((d, i) => { m[d] = f.returns[i]; });
     return m;
@@ -752,13 +809,13 @@ function renderPortfolio(pf) {
   }
 }
 
-// Correlation matrix for selected assets
+// Correlation matrix for selected assets (weekly returns to avoid timing mismatch)
 function calcCorrelation(selections) {
   if (selections.length < 2) return null;
 
-  // Build date→return lookup per fund, find common dates
+  // Use weekly returns for correlation (respecting per-fund currency mode)
   const fundData = selections.map(s => {
-    const f = FUNDS[s.idx].daily;
+    const f = getPfFundData(FUNDS[s.idx], s.idx, 'monthly');
     const m = {};
     f.dates.forEach((d, i) => { m[d] = f.returns[i]; });
     return { name: FUNDS[s.idx].shortName, map: m, dates: new Set(f.dates) };
@@ -815,7 +872,7 @@ function renderCorrelation(selections) {
 
   el.innerHTML = `
     <h3>상관행렬 (Correlation Matrix)</h3>
-    <p class="fund-meta">일별 수익률 기준 | 공통 기간 관측수: ${corr.obs.toLocaleString()}일</p>
+    <p class="fund-meta">월간 수익률 기준 | 공통 기간 관측수: ${corr.obs.toLocaleString()}개월</p>
     <table class="corr-table">${header}${rows}</table>`;
 }
 
@@ -845,54 +902,30 @@ def _pct_class(val: float) -> str:
     return ""
 
 
-def render_fund_section(fund: dict, idx: int) -> str:
-    b = fund["basic"]
-    ds = fund["dd_summary"]
+def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
+    """Render metrics + charts + tables for one analysis variant."""
+    b = data["basic"]
+    ds = data["dd_summary"]
 
-    metrics_html = f"""\
+    metrics = f"""\
     <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="label">기간</div>
-        <div class="value">{b['total_years']}년</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">총 수익률</div>
-        <div class="value {_pct_class(b['total_return'])}">{_fmt_pct(b['total_return'])}</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">CAGR</div>
-        <div class="value {_pct_class(b['cagr'])}">{_fmt_pct(b['cagr'])}</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">변동성</div>
-        <div class="value">{b['volatility']:.2f}%</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">샤프비율</div>
-        <div class="value">{b['sharpe']:.2f}</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">MDD</div>
-        <div class="value negative">{_fmt_pct(b['mdd'], False)}</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">평균 하락폭</div>
-        <div class="value negative">-{ds['avg_drawdown']:.2f}%</div>
-      </div>
-      <div class="metric-card">
-        <div class="label">최장 하락 기간</div>
-        <div class="value">{ds['longest_days']}일</div>
-      </div>
+      <div class="metric-card"><div class="label">기간</div><div class="value">{b['total_years']}년</div></div>
+      <div class="metric-card"><div class="label">총 수익률</div><div class="value {_pct_class(b['total_return'])}">{_fmt_pct(b['total_return'])}</div></div>
+      <div class="metric-card"><div class="label">CAGR</div><div class="value {_pct_class(b['cagr'])}">{_fmt_pct(b['cagr'])}</div></div>
+      <div class="metric-card"><div class="label">변동성</div><div class="value">{b['volatility']:.2f}%</div></div>
+      <div class="metric-card"><div class="label">샤프비율</div><div class="value">{b['sharpe']:.2f}</div></div>
+      <div class="metric-card"><div class="label">MDD</div><div class="value negative">{_fmt_pct(b['mdd'], False)}</div></div>
+      <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-{ds['avg_drawdown']:.2f}%</div></div>
+      <div class="metric-card"><div class="label">최장 하락 기간</div><div class="value">{ds['longest_days']}일</div></div>
     </div>"""
 
-    charts_html = f"""\
+    charts = f"""\
     <div class="chart-row">
-      <div class="chart-container"><canvas id="nav-chart-{idx}"></canvas></div>
-      <div class="chart-container"><canvas id="dd-chart-{idx}"></canvas></div>
+      <div class="chart-container"><canvas id="{canvas_id_prefix}-nav"></canvas></div>
+      <div class="chart-container"><canvas id="{canvas_id_prefix}-dd"></canvas></div>
     </div>"""
 
-    # Drawdown events table
-    events = fund["top_events"]
+    events = data["top_events"]
     if events:
         rows = ""
         for i, e in enumerate(events, 1):
@@ -902,42 +935,59 @@ def render_fund_section(fund: dict, idx: int) -> str:
             rows += f"<td>{e['duration_days']:,}일</td></tr>\n"
         dd_table = f"""\
     <h3>주요 하락 이벤트 (Top {len(events)})</h3>
-    <table>
-      <tr><th>#</th><th>시작</th><th>저점</th><th>회복</th><th>하락폭</th><th>기간</th></tr>
-      {rows}
-    </table>"""
+    <table><tr><th>#</th><th>시작</th><th>저점</th><th>회복</th><th>하락폭</th><th>기간</th></tr>
+      {rows}</table>"""
     else:
         dd_table = ""
 
-    # LS vs DCA table
-    ls_dca = fund["ls_dca"]
+    ls_dca = data["ls_dca"]
     if ls_dca:
         ls_rows = ""
         for r in ls_dca:
             win_cls = "positive" if r["win_rate"] > 50 else "negative"
             mlsa_cls = _pct_class(r["mlsa"])
-            ls_rows += f"<tr><td>{r['window']}개월</td>"
-            ls_rows += f"<td>{r['observations']:,}</td>"
+            ls_rows += f"<tr><td>{r['window']}개월</td><td>{r['observations']:,}</td>"
             ls_rows += f"<td class='{win_cls}'>{r['win_rate']:.1f}%</td>"
             ls_rows += f"<td class='{mlsa_cls}'>{_fmt_pct(r['mlsa'])}</td>"
             ls_rows += f"<td class='negative'>{_fmt_pct(r['mlsd'], False)}</td></tr>\n"
         ls_table = f"""\
     <h3>LS vs DCA 분석</h3>
-    <table>
-      <tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>
-      {ls_rows}
-    </table>"""
+    <table><tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>
+      {ls_rows}</table>"""
     else:
         ls_table = '<p style="color:#888;">데이터 부족으로 LS vs DCA 분석 불가</p>'
+
+    return f"{metrics}\n{charts}\n{dd_table}\n{ls_table}"
+
+
+def render_fund_section(fund: dict, idx: int) -> str:
+    b = fund["basic"]
+    has_krw = fund.get("has_krw", False) and "krw" in fund
+
+    # Currency toggle for USD assets
+    toggle_html = ""
+    if has_krw:
+        toggle_html = f"""\
+  <div class="currency-toggle" style="margin-bottom:1rem;">
+    <button class="btn-currency active" data-target="fund-{idx}-usd" data-pair="fund-{idx}-krw" onclick="toggleCurrency(this)">USD</button>
+    <button class="btn-currency" data-target="fund-{idx}-krw" data-pair="fund-{idx}-usd" onclick="toggleCurrency(this)">KRW 환산</button>
+  </div>"""
+
+    usd_block = _render_analysis_block(fund, f"chart-{idx}-usd")
+    usd_div = f'<div id="fund-{idx}-usd">{usd_block}</div>'
+
+    krw_div = ""
+    if has_krw:
+        krw_block = _render_analysis_block(fund["krw"], f"chart-{idx}-krw")
+        krw_div = f'<div id="fund-{idx}-krw" style="display:none">{krw_block}</div>'
 
     return f"""\
 <section class="fund-section hidden" id="fund-{idx}">
   <h2>{fund['name']}</h2>
   <p class="fund-meta">{fund['member_cd']} / {fund['fund_cd']} | {b['first_date']} ~ {b['last_date']}</p>
-  {metrics_html}
-  {charts_html}
-  {dd_table}
-  {ls_table}
+  {toggle_html}
+  {usd_div}
+  {krw_div}
 </section>"""
 
 
@@ -985,15 +1035,23 @@ def render_html(fund_results: list[dict], risk_free: float) -> str:
         render_fund_section(f, i) for i, f in enumerate(fund_results)
     )
     # Chart data for JS — include chart + daily return data for portfolio analyzer
-    chart_payload = [
-        {
+    chart_payload = []
+    for f in fund_results:
+        entry = {
             "chart": f["chart"],
             "daily": f["daily"],
+            "monthly": f["monthly"],
             "name": f["name"],
             "shortName": f["fund_cd"] if f["member_cd"] == "BENCH" else f["name"],
+            "hasKrw": f.get("has_krw", False),
         }
-        for f in fund_results
-    ]
+        if f.get("krw"):
+            entry["krw"] = {
+                "chart": f["krw"]["chart"],
+                "daily": f["krw"]["daily"],
+                "monthly": f["krw"]["monthly"],
+            }
+        chart_payload.append(entry)
     return (
         HTML_TEMPLATE
         .replace("%%GENERATED_AT%%", generated_at)
@@ -1032,24 +1090,43 @@ def main() -> None:
     # Load benchmarks (optional — file may not exist)
     bench_path = Path(args.benchmark_list)
     benchmarks: list[dict] = []
+    usd_fund_cds: set[str] = set()
     if bench_path.exists():
         with open(bench_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 if row.get("fundCd"):
                     benchmarks.append({"memberCd": "BENCH", "fundCd": row["fundCd"],
                                        "name": row.get("name") or row["fundCd"]})
+                    if row.get("currency", "").upper() == "USD":
+                        usd_fund_cds.add(row["fundCd"])
 
     conn = get_conn(args.db)
     risk_free = args.risk_free / 100.0
+
+    # Load USD/KRW for KRW adjustment of USD assets
+    usdkrw: pd.Series | None = None
+    if usd_fund_cds:
+        try:
+            usdkrw = load_nav_series(conn, "BENCH", "USDKRW")
+        except Exception:
+            logger.warning("USD/KRW data not found; KRW adjustment disabled")
 
     all_funds = funds + benchmarks
     results = []
     for f in all_funds:
         label = f.get("name") or f["fundCd"]
         print(f"Analyzing [{label}] ...")
+
+        # Build KRW-adjusted NAV for USD benchmarks
+        krw_nav = None
+        if f["fundCd"] in usd_fund_cds and usdkrw is not None:
+            usd_nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
+            fx = usdkrw.reindex(usd_nav.index, method="ffill")
+            krw_nav = (usd_nav * fx).dropna()
+
         result = analyze_fund(
             conn, f["memberCd"], f["fundCd"], label,
-            risk_free, args.top_drawdowns,
+            risk_free, args.top_drawdowns, krw_nav=krw_nav,
         )
         if result:
             results.append(result)

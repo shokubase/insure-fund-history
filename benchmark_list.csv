@@ -1,8 +1,8 @@
-ticker,name,fundCd
-KRW=X,USD/KRW,USDKRW
-GLD,SPDR Gold (GLD),GLD
-IEF,iShares 7-10Y Treasury (IEF),IEF
-TRLGX,T. Rowe Price Large Cap Growth (TRLGX),TRLGX
-^KS200,KOSPI 200,KS200
-SPY,SPDR S&P 500 (SPY),SPY
-QQQ,Invesco QQQ (QQQ),QQQ
+ticker,name,fundCd,currency
+KRW=X,USD/KRW,USDKRW,KRW
+GLD,SPDR Gold (GLD),GLD,USD
+IEF,iShares 7-10Y Treasury (IEF),IEF,USD
+TRLGX,T. Rowe Price Large Cap Growth (TRLGX),TRLGX,USD
+^KS200,KOSPI 200,KS200,KRW
+SPY,SPDR S&P 500 (SPY),SPY,USD
+QQQ,Invesco QQQ (QQQ),QQQ,USD
