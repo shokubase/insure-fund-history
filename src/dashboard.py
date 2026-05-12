@@ -195,9 +195,9 @@ def compute_correlation_matrix(conn, funds: list[dict]) -> dict | None:
 
     series = {}
     for f in funds:
-        name = f.get("name") or f["fundCd"]
+        label = f.get("fundCd") or f.get("name", "")
         nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
-        series[name] = nav.pct_change().dropna()
+        series[label] = nav.pct_change().dropna()
 
     df = pd.DataFrame(series).dropna()
     if len(df) < 30:
@@ -305,6 +305,23 @@ HTML_TEMPLATE = """\
   tr:hover { background: #f0f4ff; }
   .ongoing { color: var(--red); font-style: italic; }
 
+  /* Asset filter */
+  .asset-filter { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+                  padding: 1.5rem 2rem; margin-bottom: 2rem; }
+  .asset-filter h2 { font-size: 1.2rem; margin-bottom: 0.8rem; color: var(--accent); }
+  .filter-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .filter-chip { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.8rem;
+                 border: 1.5px solid var(--border); border-radius: 20px; font-size: 0.85rem;
+                 cursor: pointer; transition: all 0.15s; user-select: none; background: var(--bg); }
+  .filter-chip:hover { border-color: var(--accent); }
+  .filter-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .filter-chip input { display: none; }
+  .filter-actions { margin-top: 0.8rem; display: flex; gap: 0.5rem; }
+  .filter-actions button { background: none; border: 1px solid var(--border); border-radius: 6px;
+                           padding: 0.3rem 0.8rem; font-size: 0.8rem; cursor: pointer; color: #666; }
+  .filter-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .fund-section.hidden { display: none; }
+
   /* Correlation matrix */
   .corr-table { width: auto; margin: 0 auto 1rem; }
   .corr-table th, .corr-table td { text-align: center; min-width: 80px; padding: 0.6rem; font-size: 0.85rem; }
@@ -333,6 +350,16 @@ HTML_TEMPLATE = """\
 <h1>펀드 분석 대시보드</h1>
 <p class="subtitle">생성일: %%GENERATED_AT%% | 무위험수익률: %%RISK_FREE%%%</p>
 
+<!-- Asset Filter -->
+<div class="asset-filter">
+  <h2>자산 선택</h2>
+  <div class="filter-chips" id="filter-chips"></div>
+  <div class="filter-actions">
+    <button id="filter-all">전체 선택</button>
+    <button id="filter-none">전체 해제</button>
+  </div>
+</div>
+
 %%FUND_SECTIONS%%
 
 <!-- Portfolio Analyzer -->
@@ -352,6 +379,7 @@ HTML_TEMPLATE = """\
     </div>
     <div id="pf-dd-table"></div>
     <div id="pf-ls-table"></div>
+    <div id="pf-corr-table"></div>
   </div>
 </section>
 
@@ -359,59 +387,83 @@ HTML_TEMPLATE = """\
 const FUNDS = %%FUND_JSON%%;
 const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 
-// ── Individual fund charts ──
-function createCharts() {
+// ── Asset Filter ──
+(function buildFilter() {
+  const container = document.getElementById('filter-chips');
   FUNDS.forEach((fund, idx) => {
-    const navCtx = document.getElementById('nav-chart-' + idx);
-    const ddCtx = document.getElementById('dd-chart-' + idx);
-    if (!navCtx || !ddCtx) return;
-
-    new Chart(navCtx, {
-      type: 'line',
-      data: {
-        labels: fund.chart.dates,
-        datasets: [{
-          label: '기준가 (원)',
-          data: fund.chart.nav,
-          borderColor: '#2563eb',
-          backgroundColor: 'rgba(37,99,235,0.08)',
-          fill: true, pointRadius: 0, borderWidth: 1.5,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        scales: {
-          x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } },
-          y: { beginAtZero: false }
-        },
-        plugins: { legend: { display: false } }
-      }
+    const chip = document.createElement('label');
+    chip.className = 'filter-chip';
+    chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${fund.shortName || fund.name}`;
+    chip.addEventListener('click', () => {
+      setTimeout(() => {
+        const checked = chip.querySelector('input').checked;
+        chip.classList.toggle('active', checked);
+        const section = document.getElementById('fund-' + idx);
+        if (section) section.classList.toggle('hidden', !checked);
+        // Lazy-init charts on first show
+        if (checked && !section._chartsCreated) {
+          createSingleChart(idx);
+          section._chartsCreated = true;
+        }
+      }, 0);
     });
+    container.appendChild(chip);
+  });
 
-    new Chart(ddCtx, {
-      type: 'line',
-      data: {
-        labels: fund.chart.dates,
-        datasets: [{
-          label: '드로다운 (%)',
-          data: fund.chart.drawdown,
-          borderColor: '#dc2626',
-          backgroundColor: 'rgba(220,38,38,0.15)',
-          fill: true, pointRadius: 0, borderWidth: 1.5,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        scales: {
-          x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } },
-          y: { max: 0 }
-        },
-        plugins: { legend: { display: false } }
+  document.getElementById('filter-all').addEventListener('click', () => {
+    container.querySelectorAll('.filter-chip').forEach(chip => {
+      const cb = chip.querySelector('input');
+      if (!cb.checked) { cb.checked = true; chip.classList.add('active'); }
+      const idx = cb.dataset.idx;
+      const section = document.getElementById('fund-' + idx);
+      if (section) { section.classList.remove('hidden');
+        if (!section._chartsCreated) { createSingleChart(+idx); section._chartsCreated = true; }
       }
     });
   });
+
+  document.getElementById('filter-none').addEventListener('click', () => {
+    container.querySelectorAll('.filter-chip').forEach(chip => {
+      const cb = chip.querySelector('input');
+      cb.checked = false; chip.classList.remove('active');
+      const section = document.getElementById('fund-' + cb.dataset.idx);
+      if (section) section.classList.add('hidden');
+    });
+  });
+})();
+
+function createSingleChart(idx) {
+  const fund = FUNDS[idx];
+  const navCtx = document.getElementById('nav-chart-' + idx);
+  const ddCtx = document.getElementById('dd-chart-' + idx);
+  if (!navCtx || !ddCtx) return;
+
+  new Chart(navCtx, {
+    type: 'line',
+    data: { labels: fund.chart.dates, datasets: [{
+      label: '기준가 (원)', data: fund.chart.nav,
+      borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
+      fill: true, pointRadius: 0, borderWidth: 1.5,
+    }]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } },
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  new Chart(ddCtx, {
+    type: 'line',
+    data: { labels: fund.chart.dates, datasets: [{
+      label: '드로다운 (%)', data: fund.chart.drawdown,
+      borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,0.15)',
+      fill: true, pointRadius: 0, borderWidth: 1.5,
+    }]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } }, y: { max: 0 } },
+      plugins: { legend: { display: false } }
+    }
+  });
 }
-createCharts();
 
 // ── Portfolio Analyzer ──
 
@@ -700,11 +752,79 @@ function renderPortfolio(pf) {
   }
 }
 
+// Correlation matrix for selected assets
+function calcCorrelation(selections) {
+  if (selections.length < 2) return null;
+
+  // Build date→return lookup per fund, find common dates
+  const fundData = selections.map(s => {
+    const f = FUNDS[s.idx].daily;
+    const m = {};
+    f.dates.forEach((d, i) => { m[d] = f.returns[i]; });
+    return { name: FUNDS[s.idx].shortName, map: m, dates: new Set(f.dates) };
+  });
+
+  let common = [...fundData[0].dates].filter(d => fundData.every(f => f.dates.has(d))).sort();
+  if (common.length < 30) return null;
+
+  // Build return arrays for common dates
+  const arrays = fundData.map(f => common.map(d => f.map[d]));
+  const n = common.length;
+  const names = fundData.map(f => f.name);
+
+  // Compute means
+  const means = arrays.map(arr => arr.reduce((s, v) => s + v, 0) / n);
+
+  // Compute correlation matrix
+  const matrix = [];
+  for (let i = 0; i < arrays.length; i++) {
+    const row = [];
+    for (let j = 0; j < arrays.length; j++) {
+      let sumXY = 0, sumX2 = 0, sumY2 = 0;
+      for (let k = 0; k < n; k++) {
+        const dx = arrays[i][k] - means[i];
+        const dy = arrays[j][k] - means[j];
+        sumXY += dx * dy;
+        sumX2 += dx * dx;
+        sumY2 += dy * dy;
+      }
+      const denom = Math.sqrt(sumX2 * sumY2);
+      row.push(denom > 0 ? sumXY / denom : 0);
+    }
+    matrix.push(row);
+  }
+  return { names, matrix, obs: n };
+}
+
+function renderCorrelation(selections) {
+  const el = document.getElementById('pf-corr-table');
+  const corr = calcCorrelation(selections);
+  if (!corr) { el.innerHTML = ''; return; }
+
+  function cellStyle(v) {
+    if (v >= 1) return 'background:#1d4ed8;color:#fff;';
+    if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'#1a1a1a'};`;
+    return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'#1a1a1a'};`;
+  }
+
+  const header = '<tr><th></th>' + corr.names.map(n => `<th>${n}</th>`).join('') + '</tr>';
+  const rows = corr.matrix.map((row, i) =>
+    '<tr><th>' + corr.names[i] + '</th>' +
+    row.map(v => `<td style="${cellStyle(v)}">${v.toFixed(2)}</td>`).join('') + '</tr>'
+  ).join('');
+
+  el.innerHTML = `
+    <h3>상관행렬 (Correlation Matrix)</h3>
+    <p class="fund-meta">일별 수익률 기준 | 공통 기간 관측수: ${corr.obs.toLocaleString()}일</p>
+    <table class="corr-table">${header}${rows}</table>`;
+}
+
 document.getElementById('btn-analyze').addEventListener('click', () => {
   const sel = getSelections();
   if (sel.length === 0) return;
   const pf = buildPortfolio(sel);
   renderPortfolio(pf);
+  renderCorrelation(sel);
 });
 </script>
 </body>
@@ -811,7 +931,7 @@ def render_fund_section(fund: dict, idx: int) -> str:
         ls_table = '<p style="color:#888;">데이터 부족으로 LS vs DCA 분석 불가</p>'
 
     return f"""\
-<section class="fund-section" id="fund-{idx}">
+<section class="fund-section hidden" id="fund-{idx}">
   <h2>{fund['name']}</h2>
   <p class="fund-meta">{fund['member_cd']} / {fund['fund_cd']} | {b['first_date']} ~ {b['last_date']}</p>
   {metrics_html}
@@ -859,15 +979,21 @@ def render_correlation_section(corr_data: dict | None) -> str:
 </section>"""
 
 
-def render_html(fund_results: list[dict], risk_free: float, corr_data: dict | None = None) -> str:
+def render_html(fund_results: list[dict], risk_free: float) -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    fund_sections = "\n".join(
+    sections = "\n".join(
         render_fund_section(f, i) for i, f in enumerate(fund_results)
     )
-    corr_section = render_correlation_section(corr_data)
-    sections = fund_sections + "\n" + corr_section
     # Chart data for JS — include chart + daily return data for portfolio analyzer
-    chart_payload = [{"chart": f["chart"], "daily": f["daily"], "name": f["name"]} for f in fund_results]
+    chart_payload = [
+        {
+            "chart": f["chart"],
+            "daily": f["daily"],
+            "name": f["name"],
+            "shortName": f["fund_cd"] if f["member_cd"] == "BENCH" else f["name"],
+        }
+        for f in fund_results
+    ]
     return (
         HTML_TEMPLATE
         .replace("%%GENERATED_AT%%", generated_at)
@@ -885,6 +1011,7 @@ def render_html(fund_results: list[dict], risk_free: float, corr_data: dict | No
 def main() -> None:
     ap = argparse.ArgumentParser(description="펀드 분석 대시보드 생성")
     ap.add_argument("--fund-list", default="fund_list.csv")
+    ap.add_argument("--benchmark-list", default="benchmark_list.csv")
     ap.add_argument("--db", default="data/fund_history.db")
     ap.add_argument("--output", default="data/dashboard.html")
     ap.add_argument("--risk-free", type=float, default=3.5,
@@ -902,11 +1029,22 @@ def main() -> None:
     if not funds:
         raise SystemExit(f"No funds in {args.fund_list}")
 
+    # Load benchmarks (optional — file may not exist)
+    bench_path = Path(args.benchmark_list)
+    benchmarks: list[dict] = []
+    if bench_path.exists():
+        with open(bench_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("fundCd"):
+                    benchmarks.append({"memberCd": "BENCH", "fundCd": row["fundCd"],
+                                       "name": row.get("name") or row["fundCd"]})
+
     conn = get_conn(args.db)
     risk_free = args.risk_free / 100.0
 
+    all_funds = funds + benchmarks
     results = []
-    for f in funds:
+    for f in all_funds:
         label = f.get("name") or f["fundCd"]
         print(f"Analyzing [{label}] ...")
         result = analyze_fund(
@@ -919,9 +1057,7 @@ def main() -> None:
     if not results:
         raise SystemExit("No fund data to analyze.")
 
-    corr_data = compute_correlation_matrix(conn, funds) if len(funds) >= 2 else None
-
-    html = render_html(results, args.risk_free, corr_data)
+    html = render_html(results, args.risk_free)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
