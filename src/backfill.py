@@ -43,7 +43,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fund-list", default="fund_list.csv")
     ap.add_argument("--db", default="data/fund_history.db")
-    ap.add_argument("--start", default="2018-01-01")
+    ap.add_argument("--start", default="2000-01-01")
     ap.add_argument("--end", default=date.today().isoformat())
     ap.add_argument(
         "--chunk-years", type=int, default=0,
