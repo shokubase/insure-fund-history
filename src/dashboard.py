@@ -16,7 +16,6 @@ import logging
 from datetime import date, datetime, timezone
 from math import sqrt
 from pathlib import Path
-from string import Template
 
 import numpy as np
 import pandas as pd
@@ -186,6 +185,31 @@ def compute_ls_vs_dca(nav: pd.Series, window_months: int) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Correlation matrix
+# ---------------------------------------------------------------------------
+
+def compute_correlation_matrix(conn, funds: list[dict]) -> dict | None:
+    """펀드 간 일별 수익률 상관행렬 계산. 공통 날짜 기준."""
+    if len(funds) < 2:
+        return None
+
+    series = {}
+    for f in funds:
+        name = f.get("name") or f["fundCd"]
+        nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
+        series[name] = nav.pct_change().dropna()
+
+    df = pd.DataFrame(series).dropna()
+    if len(df) < 30:
+        return None
+
+    corr = df.corr()
+    names = list(corr.columns)
+    matrix = [[round(corr.iloc[i, j], 4) for j in range(len(names))] for i in range(len(names))]
+    return {"names": names, "matrix": matrix, "obs": len(df)}
+
+
+# ---------------------------------------------------------------------------
 # Analyze one fund
 # ---------------------------------------------------------------------------
 
@@ -219,6 +243,13 @@ def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
         "drawdown": [round(v * 100, 2) for v in dd_series.values],
     }
 
+    # Full daily return data for portfolio analyzer (JS-side computation)
+    daily_returns = nav.pct_change().dropna()
+    daily_data = {
+        "dates": [d.strftime("%Y-%m-%d") for d in daily_returns.index],
+        "returns": [round(v, 8) for v in daily_returns.values],
+    }
+
     return {
         "name": name,
         "member_cd": member_cd,
@@ -228,6 +259,7 @@ def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
         "top_events": top_events,
         "ls_dca": ls_dca,
         "chart": chart_data,
+        "daily": daily_data,
     }
 
 
@@ -235,7 +267,7 @@ def analyze_fund(conn, member_cd: str, fund_cd: str, name: str,
 # HTML rendering
 # ---------------------------------------------------------------------------
 
-HTML_TEMPLATE = Template("""\
+HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -272,17 +304,62 @@ HTML_TEMPLATE = Template("""\
   th:first-child, td:first-child { text-align: left; }
   tr:hover { background: #f0f4ff; }
   .ongoing { color: var(--red); font-style: italic; }
+
+  /* Correlation matrix */
+  .corr-table { width: auto; margin: 0 auto 1rem; }
+  .corr-table th, .corr-table td { text-align: center; min-width: 80px; padding: 0.6rem; font-size: 0.85rem; }
+  .corr-table th { background: var(--bg); font-size: 0.75rem; max-width: 120px;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Portfolio analyzer */
+  .portfolio-controls { margin-bottom: 1.5rem; }
+  .fund-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.5rem 0;
+              border-bottom: 1px solid var(--border); }
+  .fund-row label { flex: 1; min-width: 0; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; }
+  .fund-row label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fund-row input[type=number] { width: 70px; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
+                                  border-radius: 4px; text-align: right; font-size: 0.9rem; }
+  .fund-row input[type=range] { width: 120px; }
+  .weight-sum { margin: 0.8rem 0; font-size: 0.9rem; }
+  .weight-sum.warn { color: var(--red); font-weight: 600; }
+  .btn-analyze { background: var(--accent); color: #fff; border: none; border-radius: 8px;
+                 padding: 0.6rem 1.5rem; font-size: 1rem; cursor: pointer; }
+  .btn-analyze:hover { opacity: 0.9; }
+  .btn-analyze:disabled { background: #aaa; cursor: not-allowed; }
+  #portfolio-results { margin-top: 1.5rem; }
 </style>
 </head>
 <body>
 <h1>펀드 분석 대시보드</h1>
-<p class="subtitle">생성일: $generated_at | 무위험수익률: $risk_free%</p>
+<p class="subtitle">생성일: %%GENERATED_AT%% | 무위험수익률: %%RISK_FREE%%%</p>
 
-$fund_sections
+%%FUND_SECTIONS%%
+
+<!-- Portfolio Analyzer -->
+<section class="fund-section" id="portfolio">
+  <h2>포트폴리오 분석</h2>
+  <p class="fund-meta">펀드를 선택하고 비중을 입력한 뒤 분석 버튼을 클릭하세요</p>
+  <div class="portfolio-controls">
+    <div id="fund-selector"></div>
+    <div class="weight-sum" id="weight-sum">비중 합계: 0%</div>
+    <button class="btn-analyze" id="btn-analyze" disabled>포트폴리오 분석</button>
+  </div>
+  <div id="portfolio-results" style="display:none">
+    <div class="metrics-grid" id="pf-metrics"></div>
+    <div class="chart-row">
+      <div class="chart-container"><canvas id="pf-nav-chart"></canvas></div>
+      <div class="chart-container"><canvas id="pf-dd-chart"></canvas></div>
+    </div>
+    <div id="pf-dd-table"></div>
+    <div id="pf-ls-table"></div>
+  </div>
+</section>
 
 <script>
-const FUNDS = $fund_json;
+const FUNDS = %%FUND_JSON%%;
+const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 
+// ── Individual fund charts ──
 function createCharts() {
   FUNDS.forEach((fund, idx) => {
     const navCtx = document.getElementById('nav-chart-' + idx);
@@ -298,9 +375,7 @@ function createCharts() {
           data: fund.chart.nav,
           borderColor: '#2563eb',
           backgroundColor: 'rgba(37,99,235,0.08)',
-          fill: true,
-          pointRadius: 0,
-          borderWidth: 1.5,
+          fill: true, pointRadius: 0, borderWidth: 1.5,
         }]
       },
       options: {
@@ -322,9 +397,7 @@ function createCharts() {
           data: fund.chart.drawdown,
           borderColor: '#dc2626',
           backgroundColor: 'rgba(220,38,38,0.15)',
-          fill: true,
-          pointRadius: 0,
-          borderWidth: 1.5,
+          fill: true, pointRadius: 0, borderWidth: 1.5,
         }]
       },
       options: {
@@ -338,12 +411,305 @@ function createCharts() {
     });
   });
 }
-
 createCharts();
+
+// ── Portfolio Analyzer ──
+
+// Build fund selector UI
+(function buildSelector() {
+  const container = document.getElementById('fund-selector');
+  FUNDS.forEach((fund, idx) => {
+    const row = document.createElement('div');
+    row.className = 'fund-row';
+    row.innerHTML = `
+      <label><input type="checkbox" data-idx="${idx}">
+        <span>${fund.name}</span></label>
+      <input type="range" min="0" max="100" value="0" data-idx="${idx}">
+      <input type="number" min="0" max="100" value="0" data-idx="${idx}" style="width:70px"> %`;
+    container.appendChild(row);
+
+    const cb = row.querySelector('input[type=checkbox]');
+    const slider = row.querySelector('input[type=range]');
+    const num = row.querySelector('input[type=number]');
+
+    cb.addEventListener('change', () => {
+      if (!cb.checked) { slider.value = 0; num.value = 0; }
+      updateWeightSum();
+    });
+    slider.addEventListener('input', () => { num.value = slider.value; cb.checked = +slider.value > 0; updateWeightSum(); });
+    num.addEventListener('input', () => { slider.value = num.value; cb.checked = +num.value > 0; updateWeightSum(); });
+  });
+})();
+
+function getSelections() {
+  const rows = document.querySelectorAll('#fund-selector .fund-row');
+  const sel = [];
+  rows.forEach((row, idx) => {
+    const cb = row.querySelector('input[type=checkbox]');
+    const w = +row.querySelector('input[type=number]').value;
+    if (cb.checked && w > 0) sel.push({ idx, weight: w / 100 });
+  });
+  return sel;
+}
+
+function updateWeightSum() {
+  const sel = getSelections();
+  const sum = sel.reduce((s, x) => s + x.weight * 100, 0);
+  const el = document.getElementById('weight-sum');
+  el.textContent = `비중 합계: ${sum.toFixed(1)}%`;
+  el.className = 'weight-sum' + (Math.abs(sum - 100) > 0.1 ? ' warn' : '');
+  document.getElementById('btn-analyze').disabled = sel.length === 0 || Math.abs(sum - 100) > 0.1;
+}
+
+// Build portfolio NAV from weighted daily returns
+function buildPortfolio(selections) {
+  // Find common date range
+  const dateSets = selections.map(s => new Set(FUNDS[s.idx].daily.dates));
+  let commonDates = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
+
+  // Build date→return lookup per fund
+  const lookups = selections.map(s => {
+    const f = FUNDS[s.idx].daily;
+    const m = {};
+    f.dates.forEach((d, i) => { m[d] = f.returns[i]; });
+    return m;
+  });
+
+  const dates = commonDates;
+  const returns = dates.map(d => {
+    let r = 0;
+    selections.forEach((s, si) => { r += lookups[si][d] * s.weight; });
+    return r;
+  });
+
+  // Build NAV (start = 1000)
+  const nav = [1000];
+  for (let i = 0; i < returns.length; i++) {
+    nav.push(nav[nav.length - 1] * (1 + returns[i]));
+  }
+  // dates for NAV: add a synthetic first date (day before first return)
+  const firstDate = new Date(dates[0]);
+  firstDate.setDate(firstDate.getDate() - 1);
+  const navDates = [firstDate.toISOString().slice(0, 10), ...dates];
+
+  return { dates: navDates, nav, returns, returnDates: dates };
+}
+
+// Metrics calculation (mirrors Python)
+function calcMetrics(dates, nav) {
+  const n = nav.length;
+  const firstDate = new Date(dates[0]);
+  const lastDate = new Date(dates[n - 1]);
+  const totalYears = (lastDate - firstDate) / (365.25 * 86400000);
+  if (totalYears <= 0) return null;
+
+  const totalReturn = (nav[n - 1] / nav[0] - 1) * 100;
+  const cagr = (Math.pow(nav[n - 1] / nav[0], 1 / totalYears) - 1);
+
+  // Daily returns (from NAV)
+  const dr = [];
+  for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i - 1] - 1);
+  const mean = dr.reduce((s, v) => s + v, 0) / dr.length;
+  const variance = dr.reduce((s, v) => s + (v - mean) ** 2, 0) / (dr.length - 1);
+  const annualFactor = dr.length / totalYears;
+  const vol = Math.sqrt(variance) * Math.sqrt(annualFactor);
+  const sharpe = vol > 0 ? (cagr - RISK_FREE) / vol : 0;
+
+  // Drawdown series
+  let peak = nav[0];
+  const dd = nav.map(v => { peak = Math.max(peak, v); return (v - peak) / peak; });
+  const mdd = Math.min(...dd);
+
+  return {
+    firstDate: dates[0], lastDate: dates[n - 1],
+    totalYears: totalYears.toFixed(1),
+    totalReturn: totalReturn.toFixed(2),
+    cagr: (cagr * 100).toFixed(2),
+    volatility: (vol * 100).toFixed(2),
+    sharpe: sharpe.toFixed(2),
+    mdd: (mdd * 100).toFixed(2),
+    drawdownSeries: dd,
+  };
+}
+
+function findDrawdowns(dates, nav, topN) {
+  let peak = nav[0];
+  const dd = nav.map(v => { peak = Math.max(peak, v); return (v - peak) / peak; });
+
+  const events = [];
+  let inDd = false, start = 0, troughIdx = 0, troughVal = 0;
+
+  for (let i = 0; i < dd.length; i++) {
+    if (!inDd && dd[i] < 0) {
+      inDd = true; start = i; troughIdx = i; troughVal = dd[i];
+    } else if (inDd) {
+      if (dd[i] < troughVal) { troughIdx = i; troughVal = dd[i]; }
+      if (dd[i] >= 0) {
+        inDd = false;
+        const dStart = new Date(dates[start]), dEnd = new Date(dates[i]);
+        events.push({
+          start: dates[start], trough: dates[troughIdx], end: dates[i],
+          depth: (troughVal * 100).toFixed(2),
+          days: Math.round((dEnd - dStart) / 86400000),
+        });
+      }
+    }
+  }
+  if (inDd) {
+    const dStart = new Date(dates[start]), dEnd = new Date(dates[dates.length - 1]);
+    events.push({
+      start: dates[start], trough: dates[troughIdx], end: null,
+      depth: (troughVal * 100).toFixed(2),
+      days: Math.round((dEnd - dStart) / 86400000),
+    });
+  }
+  events.sort((a, b) => +a.depth - +b.depth);
+  return events.slice(0, topN);
+}
+
+function calcLsDca(nav, dates, windowMonths) {
+  // Resample to monthly (last value per month)
+  const monthly = {};
+  dates.forEach((d, i) => {
+    const ym = d.slice(0, 7); // YYYY-MM
+    monthly[ym] = nav[i];
+  });
+  const keys = Object.keys(monthly).sort();
+  const vals = keys.map(k => monthly[k]);
+  const n = vals.length;
+  if (n <= windowMonths) return null;
+
+  const advantages = [];
+  for (let i = 0; i <= n - windowMonths - 1; i++) {
+    const endNav = vals[i + windowMonths];
+    const rLs = endNav / vals[i] - 1;
+    let sumRatio = 0;
+    for (let k = 0; k < windowMonths; k++) sumRatio += endNav / vals[i + k];
+    const rDca = sumRatio / windowMonths - 1;
+    advantages.push(rLs - rDca);
+  }
+
+  const wins = advantages.filter(a => a > 0).length;
+  const winRate = (wins / advantages.length * 100).toFixed(1);
+  const mlsa = (advantages.reduce((s, v) => s + v, 0) / advantages.length * 100).toFixed(2);
+  const losses = advantages.filter(a => a <= 0);
+  const mlsd = losses.length > 0 ? (losses.reduce((s, v) => s + v, 0) / losses.length * 100).toFixed(2) : '0.00';
+
+  return { window: windowMonths, observations: advantages.length, winRate, mlsa, mlsd };
+}
+
+// Render portfolio results
+let pfNavChart = null, pfDdChart = null;
+
+function renderPortfolio(pf) {
+  const m = calcMetrics(pf.dates, pf.nav);
+  if (!m) return;
+
+  const events = findDrawdowns(pf.dates, pf.nav, 5);
+  const lsDca = [3, 12, 36].map(w => calcLsDca(pf.nav, pf.dates, w)).filter(Boolean);
+
+  // Drawdown summary
+  let avgDd = 0, longestDays = 0, longestStart = '-', longestEnd = '-';
+  if (events.length > 0) {
+    avgDd = (events.reduce((s, e) => s + Math.abs(+e.depth), 0) / events.length).toFixed(2);
+    const longest = events.reduce((a, b) => b.days > a.days ? b : a, events[0]);
+    longestDays = longest.days;
+    longestStart = longest.start;
+    longestEnd = longest.end || '진행중';
+  }
+
+  document.getElementById('portfolio-results').style.display = 'block';
+
+  // Metrics grid
+  const pctCls = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
+  const fmtPct = (v, sign) => (sign && +v > 0 ? '+' : '') + v + '%';
+  document.getElementById('pf-metrics').innerHTML = `
+    <div class="metric-card"><div class="label">기간</div><div class="value">${m.totalYears}년</div></div>
+    <div class="metric-card"><div class="label">총 수익률</div><div class="value ${pctCls(m.totalReturn)}">${fmtPct(m.totalReturn, true)}</div></div>
+    <div class="metric-card"><div class="label">CAGR</div><div class="value ${pctCls(m.cagr)}">${fmtPct(m.cagr, true)}</div></div>
+    <div class="metric-card"><div class="label">변동성</div><div class="value">${m.volatility}%</div></div>
+    <div class="metric-card"><div class="label">샤프비율</div><div class="value">${m.sharpe}</div></div>
+    <div class="metric-card"><div class="label">MDD</div><div class="value negative">${m.mdd}%</div></div>
+    <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-${avgDd}%</div></div>
+    <div class="metric-card"><div class="label">최장 하락 기간</div><div class="value">${longestDays}일</div></div>`;
+
+  // Charts (downsample)
+  const step = Math.max(1, Math.floor(pf.dates.length / 500));
+  const chartDates = pf.dates.filter((_, i) => i % step === 0);
+  const chartNav = pf.nav.filter((_, i) => i % step === 0);
+  const chartDd = m.drawdownSeries.filter((_, i) => i % step === 0).map(v => +(v * 100).toFixed(2));
+
+  if (pfNavChart) pfNavChart.destroy();
+  if (pfDdChart) pfDdChart.destroy();
+
+  pfNavChart = new Chart(document.getElementById('pf-nav-chart'), {
+    type: 'line',
+    data: { labels: chartDates, datasets: [{
+      label: '포트폴리오 NAV', data: chartNav.map(v => +v.toFixed(2)),
+      borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
+      fill: true, pointRadius: 0, borderWidth: 1.5,
+    }]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } },
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  pfDdChart = new Chart(document.getElementById('pf-dd-chart'), {
+    type: 'line',
+    data: { labels: chartDates, datasets: [{
+      label: '드로다운 (%)', data: chartDd,
+      borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,0.15)',
+      fill: true, pointRadius: 0, borderWidth: 1.5,
+    }]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 8 } }, y: { max: 0 } },
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  // Drawdown events table
+  if (events.length > 0) {
+    let rows = events.map((e, i) =>
+      `<tr><td>${i + 1}</td><td>${e.start}</td><td>${e.trough}</td>` +
+      `<td>${e.end || '<span class="ongoing">진행중</span>'}</td>` +
+      `<td class="negative">${e.depth}%</td><td>${e.days.toLocaleString()}일</td></tr>`
+    ).join('');
+    document.getElementById('pf-dd-table').innerHTML = `
+      <h3>주요 하락 이벤트 (Top ${events.length})</h3>
+      <table><tr><th>#</th><th>시작</th><th>저점</th><th>회복</th><th>하락폭</th><th>기간</th></tr>${rows}</table>`;
+  } else {
+    document.getElementById('pf-dd-table').innerHTML = '';
+  }
+
+  // LS vs DCA table
+  if (lsDca.length > 0) {
+    let rows = lsDca.map(r => {
+      const wCls = +r.winRate > 50 ? 'positive' : 'negative';
+      const mCls = +r.mlsa > 0 ? 'positive' : 'negative';
+      return `<tr><td>${r.window}개월</td><td>${r.observations.toLocaleString()}</td>` +
+        `<td class="${wCls}">${r.winRate}%</td>` +
+        `<td class="${mCls}">${+r.mlsa > 0 ? '+' : ''}${r.mlsa}%</td>` +
+        `<td class="negative">${r.mlsd}%</td></tr>`;
+    }).join('');
+    document.getElementById('pf-ls-table').innerHTML = `
+      <h3>LS vs DCA 분석</h3>
+      <table><tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>${rows}</table>`;
+  } else {
+    document.getElementById('pf-ls-table').innerHTML = '<p style="color:#888;">데이터 부족으로 LS vs DCA 분석 불가</p>';
+  }
+}
+
+document.getElementById('btn-analyze').addEventListener('click', () => {
+  const sel = getSelections();
+  if (sel.length === 0) return;
+  const pf = buildPortfolio(sel);
+  renderPortfolio(pf);
+});
 </script>
 </body>
 </html>
-""")
+"""
 
 
 def _fmt_pct(val: float, with_sign: bool = True) -> str:
@@ -455,18 +821,60 @@ def render_fund_section(fund: dict, idx: int) -> str:
 </section>"""
 
 
-def render_html(fund_results: list[dict], risk_free: float) -> str:
+def render_correlation_section(corr_data: dict | None) -> str:
+    if not corr_data:
+        return ""
+
+    names = corr_data["names"]
+    matrix = corr_data["matrix"]
+
+    def _cell_style(val: float) -> str:
+        if val >= 1.0:
+            return "background: #1d4ed8; color: #fff;"
+        # Blue scale for positive, red scale for negative
+        if val >= 0:
+            opacity = val
+            return f"background: rgba(37,99,235,{opacity * 0.5:.2f}); color: {'#fff' if val > 0.7 else '#1a1a1a'};"
+        else:
+            opacity = abs(val)
+            return f"background: rgba(220,38,38,{opacity * 0.5:.2f}); color: {'#fff' if val < -0.7 else '#1a1a1a'};"
+
+    header = "<tr><th></th>" + "".join(f"<th>{n}</th>" for n in names) + "</tr>"
+    rows = ""
+    for i, name in enumerate(names):
+        cells = "".join(
+            f'<td style="{_cell_style(matrix[i][j])}">{matrix[i][j]:.2f}</td>'
+            for j in range(len(names))
+        )
+        rows += f"<tr><th>{name}</th>{cells}</tr>\n"
+
+    return f"""\
+<section class="fund-section">
+  <h2>상관행렬 (Correlation Matrix)</h2>
+  <p class="fund-meta">일별 수익률 기준 | 공통 기간 관측수: {corr_data['obs']:,}일</p>
+  <table class="corr-table">
+    {header}
+    {rows}
+  </table>
+</section>"""
+
+
+def render_html(fund_results: list[dict], risk_free: float, corr_data: dict | None = None) -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    sections = "\n".join(
+    fund_sections = "\n".join(
         render_fund_section(f, i) for i, f in enumerate(fund_results)
     )
-    # Chart data for JS — strip non-chart fields
-    chart_payload = [{"chart": f["chart"]} for f in fund_results]
-    return HTML_TEMPLATE.substitute(
-        generated_at=generated_at,
-        risk_free=risk_free,
-        fund_sections=sections,
-        fund_json=json.dumps(chart_payload, ensure_ascii=False),
+    corr_section = render_correlation_section(corr_data)
+    sections = fund_sections + "\n" + corr_section
+    # Chart data for JS — include chart + daily return data for portfolio analyzer
+    chart_payload = [{"chart": f["chart"], "daily": f["daily"], "name": f["name"]} for f in fund_results]
+    return (
+        HTML_TEMPLATE
+        .replace("%%GENERATED_AT%%", generated_at)
+        .replace("%%RISK_FREE%%", str(risk_free))
+        .replace("%%RISK_FREE_DECIMAL%%", str(risk_free / 100.0))
+        .replace("%%FUND_SECTIONS%%", sections)
+        .replace("%%FUND_JSON%%", json.dumps(chart_payload, ensure_ascii=False))
     )
 
 
@@ -511,7 +919,9 @@ def main() -> None:
     if not results:
         raise SystemExit("No fund data to analyze.")
 
-    html = render_html(results, args.risk_free)
+    corr_data = compute_correlation_matrix(conn, funds) if len(funds) >= 2 else None
+
+    html = render_html(results, args.risk_free, corr_data)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
