@@ -482,8 +482,8 @@ const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 
 function renderChart(canvasId, labels, data, color, opts) {
   const ctx = document.getElementById(canvasId);
-  if (!ctx) return;
-  new Chart(ctx, {
+  if (!ctx) return null;
+  return new Chart(ctx, {
     type: 'line',
     data: { labels, datasets: [{
       label: opts.label || '', data,
@@ -591,22 +591,114 @@ function initFundTrailing(prefix, dailyData) {
   showWindow(1);
 }
 
+// Reusable drag-to-select for any NAV chart
+function attachDragSelect(canvasId, overlayId, statsId, chartRef, fullDatesOrFn, fullNavOrFn) {
+  const canvas = document.getElementById(canvasId);
+  const overlay = document.getElementById(overlayId);
+  const statsBox = document.getElementById(statsId);
+  if (!canvas || !overlay || !statsBox) return;
+
+  let dragStart = null, dragging = false;
+
+  function clear() { overlay.style.display = 'none'; statsBox.style.display = 'none'; dragStart = null; dragging = false; }
+
+  function showStats(d1, d2) {
+    const fullDates = typeof fullDatesOrFn === 'function' ? fullDatesOrFn() : fullDatesOrFn;
+    const fullNav = typeof fullNavOrFn === 'function' ? fullNavOrFn() : fullNavOrFn;
+    let si = fullDates.findIndex(d => d >= d1);
+    let ei = fullDates.length - 1;
+    for (let i = fullDates.length - 1; i >= 0; i--) { if (fullDates[i] <= d2) { ei = i; break; } }
+    if (si < 0 || si >= ei || ei - si < 2) { statsBox.style.display = 'none'; return; }
+    const dates = fullDates.slice(si, ei+1), nav = fullNav.slice(si, ei+1), n = nav.length;
+    const totalDays = (new Date(dates[n-1]) - new Date(dates[0])) / 86400000;
+    const totalYears = totalDays / 365.25;
+    const totalReturn = ((nav[n-1]/nav[0]-1)*100).toFixed(2);
+    const cagr = totalYears > 0 ? ((Math.pow(nav[n-1]/nav[0],1/totalYears)-1)*100).toFixed(2) : '-';
+    const dr = []; for (let i=1;i<n;i++) dr.push(nav[i]/nav[i-1]-1);
+    const mean = dr.reduce((s,v)=>s+v,0)/dr.length;
+    const vari = dr.reduce((s,v)=>s+(v-mean)**2,0)/(dr.length-1);
+    const af = totalYears > 0 ? dr.length/totalYears : 252;
+    const vol = (Math.sqrt(vari)*Math.sqrt(af)*100).toFixed(2);
+    let peak = nav[0], mdd = 0;
+    for (const v of nav) { peak = Math.max(peak,v); mdd = Math.min(mdd,(v-peak)/peak); }
+    const pc = v => +v>0?'positive':+v<0?'negative':'';
+    statsBox.innerHTML =
+      `<div style="font-weight:600;margin-bottom:0.3rem;">${dates[0]} ~ ${dates[n-1]}</div>`+
+      `<div>수익률: <b class="${pc(totalReturn)}">${+totalReturn>0?'+':''}${totalReturn}%</b></div>`+
+      `<div>CAGR: <b class="${pc(cagr)}">${+cagr>0?'+':''}${cagr}%</b></div>`+
+      `<div>변동성: <b>${vol}%</b></div>`+
+      `<div>MDD: <b class="negative">${(mdd*100).toFixed(2)}%</b></div>`;
+    statsBox.style.display = 'block';
+  }
+
+  canvas.addEventListener('mousedown', (e) => {
+    const chart = chartRef();
+    if (!chart) return;
+    const rect = canvas.getBoundingClientRect(), x = e.clientX - rect.left;
+    if (x < chart.chartArea.left || x > chart.chartArea.right) return;
+    dragStart = x; dragging = true;
+    overlay.style.display = 'block'; overlay.style.left = x+'px'; overlay.style.width = '0px';
+    statsBox.style.display = 'none';
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const chart = chartRef();
+    if (!chart) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(chart.chartArea.left, Math.min(e.clientX-rect.left, chart.chartArea.right));
+    overlay.style.left = Math.min(dragStart,x)+'px'; overlay.style.width = Math.abs(x-dragStart)+'px';
+  });
+  canvas.addEventListener('mouseup', (e) => {
+    if (!dragging) return;
+    dragging = false;
+    const chart = chartRef();
+    if (!chart) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(chart.chartArea.left, Math.min(e.clientX-rect.left, chart.chartArea.right));
+    if (Math.abs(x-dragStart) < 5) { clear(); return; }
+    const scale = chart.scales.x;
+    const d1 = new Date(scale.getValueForPixel(Math.min(dragStart,x))).toISOString().slice(0,10);
+    const d2 = new Date(scale.getValueForPixel(Math.max(dragStart,x))).toISOString().slice(0,10);
+    showStats(d1, d2);
+  });
+  canvas.addEventListener('mouseleave', () => { if (dragging) dragging = false; });
+}
+
+const fundCharts = {};
+
+function rebuildNav(dailyData) {
+  const nav = [1000];
+  for (let i = 0; i < dailyData.returns.length; i++) nav.push(nav[nav.length-1] * (1 + dailyData.returns[i]));
+  const d0 = new Date(dailyData.dates[0]); d0.setDate(d0.getDate()-1);
+  return { dates: [d0.toISOString().slice(0,10), ...dailyData.dates], nav };
+}
+
 function createSingleChart(idx) {
   const fund = FUNDS[idx];
-  // USD charts
-  renderChart(`chart-${idx}-usd-nav`, fund.chart.dates, fund.chart.nav,
+
+  // USD charts + drag-select
+  const usdNav = renderChart(`chart-${idx}-usd-nav`, fund.chart.dates, fund.chart.nav,
     '#2563eb', { label: '기준가', bg: 'rgba(37,99,235,0.08)' });
   renderChart(`chart-${idx}-usd-dd`, fund.chart.dates, fund.chart.drawdown,
     '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
-  // KRW charts (if available)
+  fundCharts[`${idx}-usd`] = usdNav;
+  const usdFull = rebuildNav(fund.daily);
+  attachDragSelect(`chart-${idx}-usd-nav`, `chart-${idx}-usd-overlay`, `chart-${idx}-usd-stats`,
+    () => fundCharts[`${idx}-usd`], usdFull.dates, usdFull.nav);
+
+  // KRW charts + drag-select
   if (fund.krw) {
-    renderChart(`chart-${idx}-krw-nav`, fund.krw.chart.dates, fund.krw.chart.nav,
+    const krwNav = renderChart(`chart-${idx}-krw-nav`, fund.krw.chart.dates, fund.krw.chart.nav,
       '#2563eb', { label: '기준가 (KRW)', bg: 'rgba(37,99,235,0.08)' });
     renderChart(`chart-${idx}-krw-dd`, fund.krw.chart.dates, fund.krw.chart.drawdown,
       '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+    fundCharts[`${idx}-krw`] = krwNav;
+    const krwFull = rebuildNav(fund.krw.daily);
+    attachDragSelect(`chart-${idx}-krw-nav`, `chart-${idx}-krw-overlay`, `chart-${idx}-krw-stats`,
+      () => fundCharts[`${idx}-krw`], krwFull.dates, krwFull.nav);
   }
 
-  // Init trailing returns for both USD and KRW blocks
+  // Init trailing returns
   initFundTrailing(`chart-${idx}-usd`, fund.daily);
   if (fund.krw) initFundTrailing(`chart-${idx}-krw`, fund.krw.daily);
 }
@@ -1267,102 +1359,13 @@ document.getElementById('btn-analyze').addEventListener('click', () => {
 });
 
 // ── Drag-to-select on portfolio NAV chart ──
-const overlay = document.getElementById('pf-selection-overlay');
-const statsBox = document.getElementById('pf-selection-stats');
-let dragStart = null, isDragging = false;
-
-function getDateFromX(chart, x) {
-  const scale = chart.scales.x;
-  const val = scale.getValueForPixel(x);
-  return new Date(val).toISOString().slice(0, 10);
-}
+attachDragSelect('pf-nav-chart', 'pf-selection-overlay', 'pf-selection-stats',
+  () => pfNavChart, () => pfFullDates, () => pfFullNav);
 
 function clearSelection() {
-  overlay.style.display = 'none';
-  statsBox.style.display = 'none';
-  dragStart = null;
-  isDragging = false;
+  document.getElementById('pf-selection-overlay').style.display = 'none';
+  document.getElementById('pf-selection-stats').style.display = 'none';
 }
-
-function showSelectionStats(startDate, endDate) {
-  // Find indices in full data
-  let si = pfFullDates.findIndex(d => d >= startDate);
-  let ei = pfFullDates.length - 1;
-  for (let i = pfFullDates.length - 1; i >= 0; i--) {
-    if (pfFullDates[i] <= endDate) { ei = i; break; }
-  }
-  if (si < 0 || si >= ei || ei - si < 2) { statsBox.style.display = 'none'; return; }
-
-  const dates = pfFullDates.slice(si, ei + 1);
-  const nav = pfFullNav.slice(si, ei + 1);
-  const n = nav.length;
-  const totalDays = (new Date(dates[n-1]) - new Date(dates[0])) / 86400000;
-  const totalYears = totalDays / 365.25;
-
-  const totalReturn = ((nav[n-1] / nav[0] - 1) * 100).toFixed(2);
-  const cagr = totalYears > 0 ? ((Math.pow(nav[n-1] / nav[0], 1/totalYears) - 1) * 100).toFixed(2) : '-';
-
-  const dr = [];
-  for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i-1] - 1);
-  const mean = dr.reduce((s,v) => s+v, 0) / dr.length;
-  const variance = dr.reduce((s,v) => s + (v-mean)**2, 0) / (dr.length - 1);
-  const af = totalYears > 0 ? dr.length / totalYears : 252;
-  const vol = (Math.sqrt(variance) * Math.sqrt(af) * 100).toFixed(2);
-
-  let peak = nav[0];
-  let mdd = 0;
-  for (const v of nav) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v - peak) / peak); }
-  const mddPct = (mdd * 100).toFixed(2);
-
-  const pctCls = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
-
-  statsBox.innerHTML =
-    `<div style="font-weight:600;margin-bottom:0.3rem;">${dates[0]} ~ ${dates[n-1]}</div>` +
-    `<div>수익률: <b class="${pctCls(totalReturn)}">${+totalReturn > 0 ? '+' : ''}${totalReturn}%</b></div>` +
-    `<div>CAGR: <b class="${pctCls(cagr)}">${+cagr > 0 ? '+' : ''}${cagr}%</b></div>` +
-    `<div>변동성: <b>${vol}%</b></div>` +
-    `<div>MDD: <b class="negative">${mddPct}%</b></div>`;
-  statsBox.style.display = 'block';
-}
-
-// Attach mouse events to the NAV chart canvas
-const navCanvas = document.getElementById('pf-nav-chart');
-navCanvas.addEventListener('mousedown', (e) => {
-  if (!pfNavChart) return;
-  const rect = navCanvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const area = pfNavChart.chartArea;
-  if (x < area.left || x > area.right) return;
-  dragStart = x;
-  isDragging = true;
-  overlay.style.display = 'block';
-  overlay.style.left = x + 'px';
-  overlay.style.width = '0px';
-  statsBox.style.display = 'none';
-});
-
-navCanvas.addEventListener('mousemove', (e) => {
-  if (!isDragging || !pfNavChart) return;
-  const rect = navCanvas.getBoundingClientRect();
-  const x = Math.max(pfNavChart.chartArea.left, Math.min(e.clientX - rect.left, pfNavChart.chartArea.right));
-  const left = Math.min(dragStart, x);
-  const width = Math.abs(x - dragStart);
-  overlay.style.left = left + 'px';
-  overlay.style.width = width + 'px';
-});
-
-navCanvas.addEventListener('mouseup', (e) => {
-  if (!isDragging || !pfNavChart) return;
-  isDragging = false;
-  const rect = navCanvas.getBoundingClientRect();
-  const x = Math.max(pfNavChart.chartArea.left, Math.min(e.clientX - rect.left, pfNavChart.chartArea.right));
-  if (Math.abs(x - dragStart) < 5) { clearSelection(); return; }
-  const d1 = getDateFromX(pfNavChart, Math.min(dragStart, x));
-  const d2 = getDateFromX(pfNavChart, Math.max(dragStart, x));
-  showSelectionStats(d1, d2);
-});
-
-navCanvas.addEventListener('mouseleave', () => { if (isDragging) isDragging = false; });
 </script>
 </body>
 </html>
@@ -1401,9 +1404,14 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
 
     charts = f"""\
     <div class="chart-row">
-      <div class="chart-container"><canvas id="{canvas_id_prefix}-nav"></canvas></div>
+      <div class="chart-container" style="position:relative;">
+        <canvas id="{canvas_id_prefix}-nav"></canvas>
+        <div class="drag-overlay" id="{canvas_id_prefix}-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(37,99,235,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
+        <div class="drag-stats" id="{canvas_id_prefix}-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;"></div>
+      </div>
       <div class="chart-container"><canvas id="{canvas_id_prefix}-dd"></canvas></div>
-    </div>"""
+    </div>
+    <p style="font-size:0.75rem;color:#999;margin-top:-1rem;margin-bottom:1rem;">차트에서 드래그하여 구간 분석</p>"""
 
     events = data["top_events"]
     if events:
