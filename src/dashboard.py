@@ -500,6 +500,97 @@ function renderChart(canvasId, labels, data, color, opts) {
   });
 }
 
+// Initialize trailing return section for individual fund
+const fundTrailingCharts = {};
+function initFundTrailing(prefix, dailyData) {
+  const container = document.querySelector(`.trailing-section[data-prefix="${prefix}"]`);
+  if (!container || !dailyData || dailyData.dates.length < 365) return;
+
+  // Reconstruct NAV from daily returns (start=1000)
+  const nav = [1000];
+  for (let i = 0; i < dailyData.returns.length; i++) nav.push(nav[nav.length-1] * (1 + dailyData.returns[i]));
+  const dates = [(() => { const d = new Date(dailyData.dates[0]); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })(), ...dailyData.dates];
+  const n = nav.length;
+  const totalYears = (new Date(dates[n-1]) - new Date(dates[0])) / (365.25 * 86400000);
+  const maxWindow = Math.floor(totalYears);
+  if (maxWindow < 1) return;
+
+  const windows = [];
+  for (let y = 1; y <= Math.min(maxWindow, 10); y++) windows.push(y);
+
+  const uid = prefix.replace(/[^a-z0-9]/gi, '_');
+  const chips = windows.map(y =>
+    `<label class="filter-chip${y === 1 ? ' active' : ''}" data-window="${y}"><input type="radio" name="tr-${uid}" value="${y}" ${y===1?'checked':''} style="display:none">${y}Y</label>`
+  ).join('');
+
+  container.innerHTML = `
+    <h3>Rolling Trailing Returns</h3>
+    <div class="filter-chips" style="margin-bottom:0.8rem;">${chips}</div>
+    <div class="metrics-grid" id="tr-metrics-${uid}"></div>
+    <div class="chart-container" style="height:220px;"><canvas id="tr-chart-${uid}"></canvas></div>`;
+
+  function showWindow(wy) {
+    const returns = [], rDates = [];
+    for (let i = 0; i < n; i++) {
+      const sd = new Date(dates[i]), ed = new Date(sd);
+      ed.setFullYear(ed.getFullYear() + wy);
+      const es = ed.toISOString().slice(0,10);
+      let ei = -1;
+      for (let j = i+1; j < n; j++) { if (dates[j] >= es) { ei = j; break; } }
+      if (ei < 0) break;
+      returns.push((Math.pow(nav[ei]/nav[i], 1/wy) - 1) * 100);
+      rDates.push(dates[i]);
+    }
+    if (returns.length === 0) return;
+
+    const avg = returns.reduce((s,v)=>s+v,0)/returns.length;
+    const vari = returns.reduce((s,v)=>s+(v-avg)**2,0)/(returns.length-1);
+    const std = Math.sqrt(vari), se = std/Math.sqrt(returns.length);
+    const sorted = [...returns].sort((a,b)=>a-b);
+    const median = sorted[Math.floor(sorted.length/2)];
+    const min = sorted[0], max = sorted[sorted.length-1];
+    const winRate = (returns.filter(r=>r>0).length/returns.length*100);
+
+    const pc = v => v>0?'positive':v<0?'negative':'';
+    const fp = (v,s) => (s&&v>0?'+':'')+v.toFixed(2)+'%';
+
+    document.getElementById('tr-metrics-'+uid).innerHTML = `
+      <div class="metric-card"><div class="label">관측수</div><div class="value">${returns.length}</div></div>
+      <div class="metric-card"><div class="label">평균 CAGR</div><div class="value ${pc(avg)}">${fp(avg,1)}</div></div>
+      <div class="metric-card"><div class="label">중앙값</div><div class="value ${pc(median)}">${fp(median,1)}</div></div>
+      <div class="metric-card"><div class="label">표준편차</div><div class="value">${std.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">표준오차</div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">최소</div><div class="value ${pc(min)}">${fp(min,1)}</div></div>
+      <div class="metric-card"><div class="label">최대</div><div class="value ${pc(max)}">${fp(max,1)}</div></div>
+      <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate>50?'positive':'negative'}">${winRate.toFixed(1)}%</div></div>`;
+
+    const step = Math.max(1, Math.floor(rDates.length/400));
+    const cd = rDates.filter((_,i)=>i%step===0), cr = returns.filter((_,i)=>i%step===0);
+
+    if (fundTrailingCharts[uid]) fundTrailingCharts[uid].destroy();
+    fundTrailingCharts[uid] = new Chart(document.getElementById('tr-chart-'+uid), {
+      type:'line',
+      data:{labels:cd,datasets:[
+        {label:wy+'Y CAGR (%)',data:cr.map(v=>+v.toFixed(2)),borderColor:'#2563eb',backgroundColor:'rgba(37,99,235,0.08)',fill:true,pointRadius:0,borderWidth:1.5},
+        {label:'평균',data:cd.map(()=>+avg.toFixed(2)),borderColor:'#888',borderDash:[5,5],pointRadius:0,borderWidth:1},
+        {label:'0%',data:cd.map(()=>0),borderColor:'#dc2626',borderDash:[3,3],pointRadius:0,borderWidth:1},
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,
+        scales:{x:{type:'time',time:{unit:'year'},ticks:{maxTicksLimit:8}},y:{ticks:{callback:v=>v+'%'}}},
+        plugins:{legend:{display:true,position:'top',labels:{boxWidth:12,font:{size:11}}}}}
+    });
+  }
+
+  container.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      container.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      showWindow(+chip.dataset.window);
+    });
+  });
+  showWindow(1);
+}
+
 function createSingleChart(idx) {
   const fund = FUNDS[idx];
   // USD charts
@@ -514,6 +605,10 @@ function createSingleChart(idx) {
     renderChart(`chart-${idx}-krw-dd`, fund.krw.chart.dates, fund.krw.chart.drawdown,
       '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
   }
+
+  // Init trailing returns for both USD and KRW blocks
+  initFundTrailing(`chart-${idx}-usd`, fund.daily);
+  if (fund.krw) initFundTrailing(`chart-${idx}-krw`, fund.krw.daily);
 }
 
 function toggleCurrency(btn) {
@@ -1342,7 +1437,9 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
     else:
         ls_table = '<p style="color:#888;">데이터 부족으로 LS vs DCA 분석 불가</p>'
 
-    return f"{metrics}\n{charts}\n{dd_table}\n{ls_table}"
+    trailing = f'<div class="trailing-section" data-prefix="{canvas_id_prefix}"></div>'
+
+    return f"{metrics}\n{charts}\n{trailing}\n{dd_table}\n{ls_table}"
 
 
 def render_fund_section(fund: dict, idx: int) -> str:
