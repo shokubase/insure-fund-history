@@ -52,7 +52,7 @@ def fetch_and_store(conn, ticker: str, fund_cd: str, name: str,
     prev_close = None
     for dt, row in df.iterrows():
         close = row["Close"]
-        if close is None or close <= 0:
+        if close is None or close != close or close <= 0:  # NaN check: x != x
             continue
         std_ymd = dt.strftime("%Y-%m-%d")
         change_pct = ((close / prev_close - 1) * 100) if prev_close else None
