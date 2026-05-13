@@ -981,7 +981,7 @@ FUNDS.forEach((f, i) => { if (f.hasKrw) pfFundCurrency[i] = 'krw'; });
         <span>${fund.isBench ? fund.shortName : fund.name}</span></label>
       <span class="pf-ccy-slot"></span>
       <input type="range" min="0" max="100" value="0" data-idx="${idx}">
-      <input type="number" min="0" max="100" value="0" data-idx="${idx}" style="width:70px"> %`;
+      <input type="number" min="0" max="100" value="" data-idx="${idx}" style="width:70px" placeholder="0"> %`;
     const pfToggle = buildCcyToggle(fund, idx, 'margin:0;display:inline-flex;', pfFundCurrency, null);
     if (pfToggle) row.querySelector('.pf-ccy-slot').appendChild(pfToggle);
     (fund.isBench ? pfBenchContainer : pfInsContainer).appendChild(row);
