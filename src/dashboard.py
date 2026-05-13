@@ -477,15 +477,20 @@ function buildCcyToggle(fund, idx, style, stateObj, onChange) {
   const span = document.createElement('span');
   span.className = 'currency-toggle';
   span.style.cssText = style;
-  const defaultMode = fund.currency === 'JPY' ? 'orig' : 'krw';
-  let btns = `<button class="btn-currency${defaultMode==='orig'?' active':''}" data-mode="orig" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:4px 0 0 4px;">${ccySym(fund)}</button>`;
-  btns += `<button class="btn-currency${defaultMode==='krw'?' active':''}" data-mode="krw" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-left:none;">₩</button>`;
-  if (fund.hasJpy) {
-    btns += `<button class="btn-currency" data-mode="jpy" style="padding:0.1rem 0.4rem;font-size:0.7rem;border-radius:0 4px 4px 0;border-left:none;">¥</button>`;
-  } else {
-    // close border-radius on last button
-    btns = btns.replace('border-left:none;">', 'border-left:none;border-radius:0 4px 4px 0;">');
-  }
+  const defaultMode = fund.currency === 'USD' ? 'krw' : 'orig';
+  const btnList = [];
+  // Native currency button
+  btnList.push({ mode: 'orig', label: ccySym(fund), active: defaultMode === 'orig' });
+  // KRW button (only if native is not KRW)
+  if (fund.hasKrw) btnList.push({ mode: 'krw', label: '₩', active: defaultMode === 'krw' });
+  // JPY button
+  if (fund.hasJpy) btnList.push({ mode: 'jpy', label: '¥', active: false });
+
+  let btns = btnList.map((b, i) => {
+    const radius = i === 0 ? 'border-radius:4px 0 0 4px;' : i === btnList.length - 1 ? 'border-radius:0 4px 4px 0;' : '';
+    const bl = i > 0 ? 'border-left:none;' : '';
+    return `<button class="btn-currency${b.active ? ' active' : ''}" data-mode="${b.mode}" style="padding:0.1rem 0.4rem;font-size:0.7rem;${radius}${bl}">${b.label}</button>`;
+  }).join('');
   span.innerHTML = btns;
   span.querySelectorAll('.btn-currency').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -511,7 +516,7 @@ function chipLabel(fund) {
 
 // ── Asset Filter ──
 const filterCurrencyState = {};
-FUNDS.forEach((f, i) => { if (f.hasKrw) filterCurrencyState[i] = f.currency === 'JPY' ? 'orig' : 'krw'; });
+FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.currency === 'USD' ? 'krw' : 'orig'; });
 
 (function buildFilter() {
   const filterContainers = {
@@ -901,7 +906,7 @@ function toggleFundView(btn) {
     jp: document.getElementById('corr-selector-jp'),
   };
   const corrCurrencyState = {};
-  FUNDS.forEach((f, i) => { if (f.hasKrw) corrCurrencyState[i] = f.currency === 'JPY' ? 'orig' : 'krw'; });
+  FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) corrCurrencyState[i] = f.currency === 'USD' ? 'krw' : 'orig'; });
 
   FUNDS.forEach((fund, idx) => {
     const chip = document.createElement('label');
@@ -989,7 +994,7 @@ function toggleFundView(btn) {
 
 // Per-fund currency mode for portfolio
 const pfFundCurrency = {};
-FUNDS.forEach((f, i) => { if (f.hasKrw) pfFundCurrency[i] = f.currency === 'JPY' ? 'orig' : 'krw'; });
+FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) pfFundCurrency[i] = f.currency === 'USD' ? 'krw' : 'orig'; });
 
 // Build fund selector UI
 (function buildSelector() {
@@ -1563,7 +1568,7 @@ function renderYearlyBreakdown(selections, pf) {
   }
 
   // Build table
-  const names = assetData.map(a => a.name);
+  const names = selections.map(s => FUNDS[s.idx].shortName || FUNDS[s.idx].name);
   const weights = assetData.map(a => a.weight);
 
   let header = '<tr><th>연도</th>';
@@ -1576,17 +1581,22 @@ function renderYearlyBreakdown(selections, pf) {
     const pfReturn = yearlyReturn(pf.dates, pf.nav, year);
 
     // Contribution = asset return × weight
+    // Color intensity: clamp abs return to 0~50%, map to opacity 0~0.5
+    function cellBg(v) {
+      if (v === null) return '';
+      const opacity = Math.min(Math.abs(v) / 50, 0.5);
+      const color = v > 0 ? `rgba(22,163,74,${opacity})` : v < 0 ? `rgba(220,38,38,${opacity})` : '';
+      return `background:${color};`;
+    }
     let row = `<tr><td><b>${year}</b></td>`;
     assetReturns.forEach((r, i) => {
       if (r === null) { row += '<td>-</td>'; return; }
-      const cls = r > 0 ? 'positive' : r < 0 ? 'negative' : '';
       const contrib = (r * weights[i]).toFixed(2);
-      row += `<td class="${cls}">${r > 0 ? '+' : ''}${r.toFixed(2)}%<br><span style="font-size:0.75rem;color:#888;">기여 ${+contrib > 0 ? '+' : ''}${contrib}%p</span></td>`;
+      row += `<td style="${cellBg(r)}">${r > 0 ? '+' : ''}${r.toFixed(2)}%<br><span style="font-size:0.75rem;opacity:0.7;">기여 ${+contrib > 0 ? '+' : ''}${contrib}%p</span></td>`;
     });
     // Portfolio total
     if (pfReturn !== null) {
-      const cls = pfReturn > 0 ? 'positive' : pfReturn < 0 ? 'negative' : '';
-      row += `<td style="border-left:2px solid var(--border);" class="${cls}"><b>${pfReturn > 0 ? '+' : ''}${pfReturn.toFixed(2)}%</b></td>`;
+      row += `<td style="border-left:2px solid var(--border);${cellBg(pfReturn)}"><b>${pfReturn > 0 ? '+' : ''}${pfReturn.toFixed(2)}%</b></td>`;
     } else {
       row += '<td style="border-left:2px solid var(--border);">-</td>';
     }
@@ -1714,28 +1724,26 @@ def render_fund_section(fund: dict, idx: int) -> str:
     has_jpy = fund.get("has_jpy", False) and "jpy" in fund
     ccy_label = fund.get("currency_label", "USD")
 
+    is_krw_asset = ccy_label == "KRW" or ccy_label is None
     is_jpy_asset = ccy_label == "JPY"
-    default_view = "orig" if is_jpy_asset else "krw"
+    default_view = "orig"  # orig is always the native currency
 
     toggle_html = ""
     if has_krw or has_jpy:
-        orig_active = " active" if default_view == "orig" else ""
-        krw_active = " active" if default_view == "krw" else ""
-        btns = f'<button class="btn-currency{orig_active}" data-view="fund-{idx}-orig" onclick="toggleFundView(this)">{ccy_label}</button>'
-        btns += f'<button class="btn-currency{krw_active}" data-view="fund-{idx}-krw" onclick="toggleFundView(this)">KRW</button>'
+        btns = f'<button class="btn-currency active" data-view="fund-{idx}-orig" onclick="toggleFundView(this)">{ccy_label or "KRW"}</button>'
+        if has_krw:
+            btns += f'<button class="btn-currency" data-view="fund-{idx}-krw" onclick="toggleFundView(this)">KRW</button>'
         if has_jpy:
             btns += f'<button class="btn-currency" data-view="fund-{idx}-jpy" onclick="toggleFundView(this)">JPY</button>'
         toggle_html = f'<div class="currency-toggle" style="margin-bottom:1rem;" data-group="fund-{idx}">{btns}</div>'
 
     orig_block = _render_analysis_block(fund, f"chart-{idx}-usd")
-    orig_hide = '' if (default_view == "orig" or not (has_krw or has_jpy)) else ' style="display:none"'
-    orig_div = f'<div id="fund-{idx}-orig"{orig_hide}>{orig_block}</div>'
+    orig_div = f'<div id="fund-{idx}-orig">{orig_block}</div>'
 
     krw_div = ""
     if has_krw:
-        krw_hide = '' if default_view == "krw" else ' style="display:none"'
         krw_block = _render_analysis_block(fund["krw"], f"chart-{idx}-krw")
-        krw_div = f'<div id="fund-{idx}-krw"{krw_hide}>{krw_block}</div>'
+        krw_div = f'<div id="fund-{idx}-krw" style="display:none">{krw_block}</div>'
 
     jpy_div = ""
     if has_jpy:
@@ -1910,6 +1918,12 @@ def main() -> None:
             if "JPYKRW" in fx_rates:
                 fx = fx_rates["JPYKRW"].reindex(foreign_nav.index, method="ffill")
                 krw_nav = (foreign_nav * fx).dropna()
+        else:
+            # KRW assets (insurance funds, KS200) → JPY conversion
+            if "JPYKRW" in fx_rates:
+                krw_asset_nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
+                fx = fx_rates["JPYKRW"].reindex(krw_asset_nav.index, method="ffill")
+                jpy_nav = (krw_asset_nav / fx).dropna()
 
         result = analyze_fund(
             conn, f["memberCd"], f["fundCd"], label,
@@ -1917,7 +1931,7 @@ def main() -> None:
         )
         if result:
             result["currency_label"] = ccy or "KRW"
-            # Add JPY analysis for USD assets
+            # Add JPY analysis
             if jpy_nav is not None and len(jpy_nav) >= 30:
                 result["has_jpy"] = True
                 result["jpy"] = _build_series_data(jpy_nav, risk_free, args.top_drawdowns)
