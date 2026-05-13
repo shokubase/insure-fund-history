@@ -1036,10 +1036,10 @@ function getPfFundData(fund, idx, key) {
 function getSelections() {
   const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row');
   const sel = [];
-  rows.forEach((row, idx) => {
+  rows.forEach(row => {
     const cb = row.querySelector('input[type=checkbox]');
     const w = +row.querySelector('input[type=number]').value;
-    if (cb.checked && w > 0) sel.push({ idx, weight: w / 100 });
+    if (cb.checked && w > 0) sel.push({ idx: +cb.dataset.idx, weight: w / 100 });
   });
   return sel;
 }
@@ -1069,7 +1069,13 @@ function updateWeightSum() {
   if (common.length === 0) { info.textContent = '공통 기간 없음'; return; }
   const earliest = common[0];
   const latest = common[common.length - 1];
-  info.textContent = `공통 기간: ${earliest} ~ ${latest}`;
+  // Find which asset(s) determined the start date
+  const bottlenecks = sel.filter(s => {
+    const d = getPfFundData(FUNDS[s.idx], s.idx, 'daily');
+    return d.dates[0] >= earliest;
+  }).map(s => chipLabel(FUNDS[s.idx]));
+  const bottleneckStr = bottlenecks.length > 0 ? ` (${bottlenecks.join(', ')})` : '';
+  info.textContent = `공통 기간: ${earliest} ~ ${latest}${bottleneckStr}`;
   startInput.min = earliest; startInput.max = latest;
   endInput.min = earliest; endInput.max = latest;
   if (!startInput.value || startInput.value < earliest) startInput.value = earliest;
