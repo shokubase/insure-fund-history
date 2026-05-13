@@ -339,7 +339,7 @@ HTML_TEMPLATE = """\
   .fund-section.hidden { display: none; }
 
   /* Two-column selector layout */
-  .selector-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 0.8rem; }
+  .selector-columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; margin-bottom: 0.8rem; }
   .selector-column h4 { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em;
                          margin-bottom: 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
   .selector-column .filter-chips { margin-bottom: 0; }
@@ -386,7 +386,8 @@ HTML_TEMPLATE = """\
   <h2>자산 선택</h2>
   <div class="selector-columns">
     <div class="selector-column"><h4>보험펀드</h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
-    <div class="selector-column"><h4>벤치마크</h4><div class="filter-chips" id="filter-chips-benchmark"></div></div>
+    <div class="selector-column"><h4>미국</h4><div class="filter-chips" id="filter-chips-us"></div></div>
+    <div class="selector-column"><h4>일본</h4><div class="filter-chips" id="filter-chips-jp"></div></div>
   </div>
   <div class="filter-actions">
     <button id="filter-all">전체 선택</button>
@@ -410,7 +411,8 @@ HTML_TEMPLATE = """\
   <div class="portfolio-controls">
     <div class="selector-columns">
       <div class="selector-column"><h4>보험펀드</h4><div class="filter-chips" id="corr-selector-insurance"></div></div>
-      <div class="selector-column"><h4>벤치마크</h4><div class="filter-chips" id="corr-selector-benchmark"></div></div>
+      <div class="selector-column"><h4>미국</h4><div class="filter-chips" id="corr-selector-us"></div></div>
+      <div class="selector-column"><h4>일본</h4><div class="filter-chips" id="corr-selector-jp"></div></div>
     </div>
   </div>
   <div id="corr-result"></div>
@@ -423,7 +425,8 @@ HTML_TEMPLATE = """\
   <div class="portfolio-controls">
     <div class="selector-columns" id="fund-selector">
       <div class="selector-column"><h4>보험펀드</h4><div id="fund-selector-insurance"></div></div>
-      <div class="selector-column"><h4>벤치마크</h4><div id="fund-selector-benchmark"></div></div>
+      <div class="selector-column"><h4>미국</h4><div id="fund-selector-us"></div></div>
+      <div class="selector-column"><h4>일본</h4><div id="fund-selector-jp"></div></div>
     </div>
     <div style="margin:0.8rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
       <div class="weight-sum" id="weight-sum" style="margin:0;">비중 합계: 0%</div>
@@ -493,17 +496,31 @@ function buildCcyToggle(fund, idx, style, stateObj, onChange) {
   return span;
 }
 
+// Fund region helper
+function fundRegion(fund) {
+  if (!fund.isBench) return 'insurance';
+  if (fund.currency === 'JPY') return 'jp';
+  return 'us';
+}
+function chipLabel(fund) {
+  if (fund.currency === 'JPY' && fund.isBench) return fund.name;  // JPY: show full name (숫자 코드만으로는 식별 어려움)
+  return fund.shortName || fund.name;
+}
+
 // ── Asset Filter ──
 const filterCurrencyState = {};
 FUNDS.forEach((f, i) => { if (f.hasKrw) filterCurrencyState[i] = 'krw'; });
 
 (function buildFilter() {
-  const insContainer = document.getElementById('filter-chips-insurance');
-  const benchContainer = document.getElementById('filter-chips-benchmark');
+  const filterContainers = {
+    insurance: document.getElementById('filter-chips-insurance'),
+    us: document.getElementById('filter-chips-us'),
+    jp: document.getElementById('filter-chips-jp'),
+  };
   FUNDS.forEach((fund, idx) => {
     const chip = document.createElement('label');
     chip.className = 'filter-chip';
-    chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${fund.shortName || fund.name}`;
+    chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${chipLabel(fund)}`;
 
     const fToggle = buildCcyToggle(fund, idx, 'margin:0 0 0 0.3rem;display:inline-flex;', filterCurrencyState, updateComparison);
     if (fToggle) chip.appendChild(fToggle);
@@ -522,10 +539,10 @@ FUNDS.forEach((f, i) => { if (f.hasKrw) filterCurrencyState[i] = 'krw'; });
         updateComparison();
       }, 0);
     });
-    (fund.isBench ? benchContainer : insContainer).appendChild(chip);
+    filterContainers[fundRegion(fund)].appendChild(chip);
   });
 
-  const allFilterChips = () => document.querySelectorAll('#filter-chips-insurance .filter-chip, #filter-chips-benchmark .filter-chip');
+  const allFilterChips = () => document.querySelectorAll('#filter-chips-insurance .filter-chip, #filter-chips-us .filter-chip, #filter-chips-jp .filter-chip');
 
   document.getElementById('filter-all').addEventListener('click', () => {
     allFilterChips().forEach(chip => {
@@ -558,7 +575,7 @@ let comparisonChart = null;
 function updateComparison() {
   const section = document.getElementById('comparison-section');
   const selected = [];
-  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-benchmark input:checked').forEach(cb => {
+  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked').forEach(cb => {
     selected.push(+cb.dataset.idx);
   });
 
@@ -876,8 +893,11 @@ function toggleFundView(btn) {
 
 // ── Correlation Matrix Analyzer ──
 (function buildCorrSelector() {
-  const corrInsContainer = document.getElementById('corr-selector-insurance');
-  const corrBenchContainer = document.getElementById('corr-selector-benchmark');
+  const corrContainers = {
+    insurance: document.getElementById('corr-selector-insurance'),
+    us: document.getElementById('corr-selector-us'),
+    jp: document.getElementById('corr-selector-jp'),
+  };
   const corrCurrencyState = {};
   FUNDS.forEach((f, i) => { if (f.hasKrw) corrCurrencyState[i] = 'krw'; });
 
@@ -885,7 +905,7 @@ function toggleFundView(btn) {
     const chip = document.createElement('label');
     chip.className = 'filter-chip';
     chip.dataset.idx = idx;
-    chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${fund.shortName || fund.name}`;
+    chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${chipLabel(fund)}`;
 
     const cToggle = buildCcyToggle(fund, idx, 'margin:0 0 0 0.3rem;display:inline-flex;', corrCurrencyState, updateCorrMatrix);
     if (cToggle) chip.appendChild(cToggle);
@@ -898,7 +918,7 @@ function toggleFundView(btn) {
         updateCorrMatrix();
       }, 0);
     });
-    (fund.isBench ? corrBenchContainer : corrInsContainer).appendChild(chip);
+    corrContainers[fundRegion(fund)].appendChild(chip);
   });
 
   function getCorrData(fund, idx, key) {
@@ -908,7 +928,7 @@ function toggleFundView(btn) {
   function updateCorrMatrix() {
     const el = document.getElementById('corr-result');
     const selected = [];
-    document.querySelectorAll('#corr-selector-insurance input:checked, #corr-selector-benchmark input:checked').forEach(cb => {
+    document.querySelectorAll('#corr-selector-insurance input:checked, #corr-selector-us input:checked, #corr-selector-jp input:checked').forEach(cb => {
       selected.push(+cb.dataset.idx);
     });
 
@@ -971,32 +991,32 @@ FUNDS.forEach((f, i) => { if (f.hasKrw) pfFundCurrency[i] = 'krw'; });
 
 // Build fund selector UI
 (function buildSelector() {
-  const pfInsContainer = document.getElementById('fund-selector-insurance');
-  const pfBenchContainer = document.getElementById('fund-selector-benchmark');
+  const pfContainers = {
+    insurance: document.getElementById('fund-selector-insurance'),
+    us: document.getElementById('fund-selector-us'),
+    jp: document.getElementById('fund-selector-jp'),
+  };
   FUNDS.forEach((fund, idx) => {
     const row = document.createElement('div');
     row.className = 'fund-row';
     row.innerHTML = `
       <label><input type="checkbox" data-idx="${idx}">
-        <span>${fund.isBench ? fund.shortName : fund.name}</span></label>
+        <span>${chipLabel(fund)}</span></label>
       <span class="pf-ccy-slot"></span>
-      <input type="range" min="0" max="100" value="0" data-idx="${idx}">
       <input type="number" min="0" max="100" value="" data-idx="${idx}" style="width:70px" placeholder="0"> %`;
     const pfToggle = buildCcyToggle(fund, idx, 'margin:0;display:inline-flex;', pfFundCurrency, null);
     if (pfToggle) row.querySelector('.pf-ccy-slot').appendChild(pfToggle);
-    (fund.isBench ? pfBenchContainer : pfInsContainer).appendChild(row);
+    pfContainers[fundRegion(fund)].appendChild(row);
 
     const cb = row.querySelector('input[type=checkbox]');
-    const slider = row.querySelector('input[type=range]');
     const num = row.querySelector('input[type=number]');
 
     cb.addEventListener('change', () => {
-      if (!cb.checked) { slider.value = 0; num.value = 0; }
-      else if (+num.value === 0) { num.value = 20; slider.value = 20; }
+      if (!cb.checked) { num.value = ''; }
+      else if (!num.value || +num.value === 0) { num.value = 20; }
       updateWeightSum();
     });
-    slider.addEventListener('input', () => { num.value = slider.value; cb.checked = +slider.value > 0; updateWeightSum(); });
-    num.addEventListener('input', () => { slider.value = num.value; cb.checked = +num.value > 0; updateWeightSum(); });
+    num.addEventListener('input', () => { cb.checked = +num.value > 0; updateWeightSum(); });
   });
 })();
 
@@ -1012,7 +1032,7 @@ function getPfFundData(fund, idx, key) {
 }
 
 function getSelections() {
-  const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-benchmark .fund-row');
+  const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row');
   const sel = [];
   rows.forEach((row, idx) => {
     const cb = row.querySelector('input[type=checkbox]');
