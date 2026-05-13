@@ -450,6 +450,7 @@ HTML_TEMPLATE = """\
       <div class="chart-container"><canvas id="pf-dd-chart"></canvas></div>
     </div>
     <p style="font-size:0.75rem;color:#999;margin-top:-1rem;margin-bottom:1rem;">NAV 차트에서 드래그하여 구간 분석 (클릭하면 해제)</p>
+    <div id="pf-yearly"></div>
     <div id="pf-trailing"></div>
     <div id="pf-dd-table"></div>
     <div id="pf-ls-table"></div>
@@ -1514,11 +1515,95 @@ function renderCorrelation(selections) {
     <table class="corr-table">${header}${rows}</table>`;
 }
 
+// Yearly return breakdown per asset + portfolio
+function renderYearlyBreakdown(selections, pf) {
+  const el = document.getElementById('pf-yearly');
+  if (!pf || pf.dates.length < 30) { el.innerHTML = ''; return; }
+
+  // Get year range from portfolio dates
+  const startYear = +pf.dates[0].slice(0, 4);
+  const endYear = +pf.dates[pf.dates.length - 1].slice(0, 4);
+  const years = [];
+  for (let y = startYear; y <= endYear; y++) years.push(y);
+  if (years.length < 1) { el.innerHTML = ''; return; }
+
+  // For each asset: build NAV from daily returns, compute yearly returns
+  const assetData = selections.map(s => {
+    const daily = getPfFundData(FUNDS[s.idx], s.idx, 'daily');
+    const nav = [1000];
+    const dates = [];
+    // Synthetic first date
+    const d0 = new Date(daily.dates[0]); d0.setDate(d0.getDate() - 1);
+    dates.push(d0.toISOString().slice(0, 10));
+    for (let i = 0; i < daily.returns.length; i++) {
+      nav.push(nav[nav.length - 1] * (1 + daily.returns[i]));
+      dates.push(daily.dates[i]);
+    }
+    return { name: chipLabel(FUNDS[s.idx]), weight: s.weight, dates, nav };
+  });
+
+  // Compute yearly return for a (dates, nav) series
+  function yearlyReturn(dates, nav, year) {
+    // Find first and last index in this year
+    let si = -1, ei = -1;
+    // Find last date of previous year or first date of this year
+    for (let i = 0; i < dates.length; i++) {
+      const y = +dates[i].slice(0, 4);
+      if (y === year && si < 0) si = Math.max(0, i - 1); // use prev day as start
+      if (y === year) ei = i;
+    }
+    if (si < 0 || ei <= si) return null;
+    return (nav[ei] / nav[si] - 1) * 100;
+  }
+
+  // Build table
+  const names = assetData.map(a => a.name);
+  const weights = assetData.map(a => a.weight);
+
+  let header = '<tr><th>연도</th>';
+  names.forEach((n, i) => { header += `<th>${n}<br><span style="font-weight:400;color:#888;">${(weights[i]*100).toFixed(0)}%</span></th>`; });
+  header += '<th style="border-left:2px solid var(--border);">포트폴리오</th></tr>';
+
+  let rows = '';
+  for (const year of years) {
+    const assetReturns = assetData.map(a => yearlyReturn(a.dates, a.nav, year));
+    const pfReturn = yearlyReturn(pf.dates, pf.nav, year);
+
+    // Contribution = asset return × weight
+    let row = `<tr><td><b>${year}</b></td>`;
+    assetReturns.forEach((r, i) => {
+      if (r === null) { row += '<td>-</td>'; return; }
+      const cls = r > 0 ? 'positive' : r < 0 ? 'negative' : '';
+      const contrib = (r * weights[i]).toFixed(2);
+      row += `<td class="${cls}">${r > 0 ? '+' : ''}${r.toFixed(2)}%<br><span style="font-size:0.75rem;color:#888;">기여 ${+contrib > 0 ? '+' : ''}${contrib}%p</span></td>`;
+    });
+    // Portfolio total
+    if (pfReturn !== null) {
+      const cls = pfReturn > 0 ? 'positive' : pfReturn < 0 ? 'negative' : '';
+      row += `<td style="border-left:2px solid var(--border);" class="${cls}"><b>${pfReturn > 0 ? '+' : ''}${pfReturn.toFixed(2)}%</b></td>`;
+    } else {
+      row += '<td style="border-left:2px solid var(--border);">-</td>';
+    }
+    row += '</tr>';
+    rows += row;
+  }
+
+  el.innerHTML = `
+    <h3>연도별 자산 수익률 및 기여도</h3>
+    <div style="overflow-x:auto;">
+    <table style="min-width:100%;">
+      ${header}
+      ${rows}
+    </table>
+    </div>`;
+}
+
 document.getElementById('btn-analyze').addEventListener('click', () => {
   const sel = getSelections();
   if (sel.length === 0) return;
   const pf = buildPortfolio(sel);
   renderPortfolio(pf);
+  renderYearlyBreakdown(sel, pf);
   renderCorrelation(sel);
   clearSelection();
 });
