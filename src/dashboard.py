@@ -1615,15 +1615,20 @@ function renderYearlyBreakdown(selections, pf) {
 
   // Compute yearly: asset return, portfolio return, and exact contribution
   // Contribution = sum of (asset_daily_return × weight) for each day, compounded
+  // Build per-asset FULL daily return data (not just common dates)
+  const assetFullDailys = selections.map(s => getPfFundData(FUNDS[s.idx], s.idx, 'daily'));
+
   function yearlyData(year) {
-    // Get portfolio dates in this year
+    // Get portfolio dates in this year (common dates for portfolio calculation)
     const yearDates = pf.returnDates ? pf.returnDates.filter(d => d.slice(0,4) === ''+year) : [];
     if (yearDates.length === 0) return null;
 
-    // Asset yearly returns (from individual NAV)
-    const assetReturns = assetLookups.map(lookup => {
+    // Asset yearly returns: use each asset's OWN full daily data, not common dates
+    const assetReturns = assetFullDailys.map(daily => {
       let cum = 1;
-      for (const d of yearDates) cum *= (1 + (lookup[d] || 0));
+      for (let i = 0; i < daily.dates.length; i++) {
+        if (daily.dates[i].slice(0,4) === ''+year) cum *= (1 + daily.returns[i]);
+      }
       return (cum - 1) * 100;
     });
 
@@ -1666,7 +1671,13 @@ function renderYearlyBreakdown(selections, pf) {
       ? rawContribs.map(c => c * pfReturn / rawSum)
       : rawContribs;
 
-    return { assetReturns, pfReturn, contribs: scaledContribs };
+    // Detect partial year: first and last month in this year's data
+    const firstMonth = +yearDates[0].slice(5,7);
+    const lastMonth = +yearDates[yearDates.length-1].slice(5,7);
+    const isPartial = firstMonth > 1 || lastMonth < 12;
+    const monthRange = isPartial ? `${yearDates[0].slice(5,7)}~${yearDates[yearDates.length-1].slice(5,7)}월` : null;
+
+    return { assetReturns, pfReturn, contribs: scaledContribs, monthRange };
   }
 
   function cellBg(v) {
@@ -1685,7 +1696,8 @@ function renderYearlyBreakdown(selections, pf) {
     const yd = yearlyData(year);
     if (!yd) { rows += `<tr><td><b>${year}</b></td>${names.map(()=>'<td>-</td>').join('')}<td style="border-left:2px solid var(--border);">-</td></tr>`; continue; }
 
-    let row = `<tr><td><b>${year}</b></td>`;
+    const yearLabel = yd.monthRange ? `${year}<br><span style="font-size:0.6rem;color:#999;">${yd.monthRange}</span>` : `${year}`;
+    let row = `<tr><td><b>${yearLabel}</b></td>`;
     yd.assetReturns.forEach((r, i) => {
       const c = yd.contribs[i];
       row += `<td style="${cellBg(r)}padding:0.3rem 0.4rem;">${r > 0 ? '+' : ''}${r.toFixed(1)}%<br><span style="font-size:0.65rem;opacity:0.6;">${c > 0 ? '+' : ''}${c.toFixed(1)}%p</span></td>`;
