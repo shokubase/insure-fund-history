@@ -1,24 +1,24 @@
-ticker,name,fundCd,currency
-KRW=X,USD/KRW,USDKRW,KRW
-GLD,SPDR Gold (GLD),GLD,USD
-IEF,iShares 7-10Y Treasury (IEF),IEF,USD
-TRLGX,T. Rowe Price Large Cap Growth (TRLGX),TRLGX,USD
-^KS200,KOSPI 200,KS200,KRW
-SPY,SPDR S&P 500 (SPY),SPY,USD
-QQQ,Invesco QQQ (QQQ),QQQ,USD
-IWF,iShares Russell 1000 Growth (IWF),IWF,USD
-BIL,SPDR 1-3M T-Bill (BIL),BIL,USD
-JPYKRW=X,JPY/KRW,JPYKRW,KRW
-JPY=X,USD/JPY,USDJPY,KRW
-1656.T,iShares 米国債7-10年 (1656),1656,JPY
-1698.T,日本高配当 (1698),1698,JPY
-1329.T,iShares 日経225 (1329),1329,JPY
-SCHD,Schwab US Dividend (SCHD),SCHD,USD
-TLT,iShares 20+Y Treasury (TLT),TLT,USD
-ZROZ,PIMCO 25+Y Zero Coupon (ZROZ),ZROZ,USD
-1322.T,中国A株 CSI300 (1322),1322,JPY
-1678.T,NEXT FUNDS Nifty50 (1678),1678,JPY
-INDY,iShares India 50 (INDY),INDY,USD
-1658.T,iShares 新興国株 (1658),1658,JPY
-DVY,iShares Select Dividend (DVY),DVY,USD
-MSGO,MS Global Opportunity (MSGO),MSGO,USD
+ticker,name,fundCd,currency,region
+KRW=X,USD/KRW,USDKRW,KRW,us
+GLD,SPDR Gold (GLD),GLD,USD,us
+IEF,iShares 7-10Y Treasury (IEF),IEF,USD,us
+TRLGX,T. Rowe Price Large Cap Growth (TRLGX),TRLGX,USD,us
+SPY,SPDR S&P 500 (SPY),SPY,USD,us
+QQQ,Invesco QQQ (QQQ),QQQ,USD,us
+IWF,iShares Russell 1000 Growth (IWF),IWF,USD,us
+BIL,SPDR 1-3M T-Bill (BIL),BIL,USD,us
+JPYKRW=X,JPY/KRW,JPYKRW,KRW,jp
+JPY=X,USD/JPY,USDJPY,KRW,us
+1656.T,iShares 米国債7-10年 (1656),1656,JPY,jp
+1698.T,日本高配当 (1698),1698,JPY,jp
+1329.T,iShares 日経225 (1329),1329,JPY,jp
+SCHD,Schwab US Dividend (SCHD),SCHD,USD,us
+TLT,iShares 20+Y Treasury (TLT),TLT,USD,us
+ZROZ,PIMCO 25+Y Zero Coupon (ZROZ),ZROZ,USD,us
+1322.T,中国A株 CSI300 (1322),1322,JPY,jp
+1678.T,NEXT FUNDS Nifty50 (1678),1678,JPY,jp
+INDY,iShares India 50 (INDY),INDY,USD,us
+1658.T,iShares 新興国株 (1658),1658,JPY,jp
+DVY,iShares Select Dividend (DVY),DVY,USD,us
+MSGO,MS Global Opportunity (MSGO),MSGO,USD,us
+^KS200,KOSPI 200,KS200,KRW,index

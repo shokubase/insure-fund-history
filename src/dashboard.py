@@ -365,7 +365,7 @@ HTML_TEMPLATE = """\
   .portfolio-controls { margin-bottom: 1.5rem; }
   .fund-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.5rem 0;
               border-bottom: 1px solid var(--border); }
-  .fund-row label { flex: 1; min-width: 0; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; }
+  .fund-row label { flex: 1; min-width: 0; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
   .fund-row label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fund-row input[type=number] { width: 70px; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
                                   border-radius: 4px; text-align: right; font-size: 0.9rem; }
@@ -377,6 +377,10 @@ HTML_TEMPLATE = """\
   .btn-analyze:hover { opacity: 0.9; }
   .btn-analyze:disabled { background: #aaa; cursor: not-allowed; }
   #portfolio-results { margin-top: 1.5rem; }
+  .preset-chip { position: relative; padding-right: 1.6rem !important; }
+  .preset-chip .preset-del { position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%);
+    font-size: 0.7rem; color: #999; cursor: pointer; line-height: 1; }
+  .preset-chip .preset-del:hover { color: var(--red); }
 </style>
 </head>
 <body>
@@ -389,7 +393,7 @@ HTML_TEMPLATE = """\
   <div class="selector-columns">
     <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="filter-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
     <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="filter-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-us"></div></div>
-    <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div></div>
+    <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="filter-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-index"></div></div>
   </div>
   <div class="filter-actions">
     <button id="filter-all">전체 선택</button>
@@ -414,7 +418,7 @@ HTML_TEMPLATE = """\
     <div class="selector-columns">
       <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="corr-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="corr-selector-insurance"></div></div>
       <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="corr-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="corr-selector-us"></div></div>
-      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="corr-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="corr-selector-jp"></div></div>
+      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="corr-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="corr-selector-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="corr-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="corr-selector-index"></div></div>
     </div>
   </div>
   <div id="corr-result"></div>
@@ -428,7 +432,7 @@ HTML_TEMPLATE = """\
     <div class="selector-columns" id="fund-selector">
       <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="pf-insurance" data-modes="orig,jpy"></span></h4><div id="fund-selector-insurance"></div></div>
       <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="pf-us" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-us"></div></div>
-      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="pf-jp" data-modes="orig,krw"></span></h4><div id="fund-selector-jp"></div></div>
+      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="pf-jp" data-modes="orig,krw"></span></h4><div id="fund-selector-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="pf-index" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-index"></div></div>
     </div>
     <div style="margin:0.8rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
       <div class="weight-sum" id="weight-sum" style="margin:0;">비중 합계: 0%</div>
@@ -440,6 +444,11 @@ HTML_TEMPLATE = """\
       <span id="pf-date-info" style="font-size:0.8rem;color:#888;"></span>
     </div>
     <button class="btn-analyze" id="btn-analyze" disabled>포트폴리오 분석</button>
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;">
+      <button class="btn-analyze" id="btn-save-preset" style="background:#666;padding:0.4rem 1rem;font-size:0.85rem;" disabled>현재 설정 저장</button>
+      <span style="font-size:0.8rem;color:#888;">저장된 포트폴리오:</span>
+      <div id="preset-chips" class="filter-chips" style="display:inline-flex;"></div>
+    </div>
   </div>
   <div id="portfolio-results" style="display:none">
     <div class="metrics-grid" id="pf-metrics"></div>
@@ -516,6 +525,8 @@ function buildColCcyToggles() {
     const [group, region] = colId.split('-');  // "filter"+"us", "corr"+"jp", "pf"+"insurance"
 
     const modeLabel = { orig: region === 'us' ? '$' : region === 'jp' ? '¥' : '₩', krw: '₩', jpy: '¥' };
+    // index column: orig depends on each fund's currency, so use generic label
+    if (region === 'index') modeLabel.orig = '기본';
 
     modes.forEach((mode, i) => {
       const btn = document.createElement('button');
@@ -544,6 +555,7 @@ buildColCcyToggles();
 // Fund region helper
 function fundRegion(fund) {
   if (!fund.isBench) return 'insurance';
+  if (fund.region) return fund.region;  // 'us', 'jp', 'index'
   if (fund.currency === 'JPY') return 'jp';
   return 'us';
 }
@@ -561,6 +573,7 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
     insurance: document.getElementById('filter-chips-insurance'),
     us: document.getElementById('filter-chips-us'),
     jp: document.getElementById('filter-chips-jp'),
+    index: document.getElementById('filter-chips-index'),
   };
   FUNDS.forEach((fund, idx) => {
     const chip = document.createElement('label');
@@ -587,7 +600,7 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
     filterContainers[fundRegion(fund)].appendChild(chip);
   });
 
-  const allFilterChips = () => document.querySelectorAll('#filter-chips-insurance .filter-chip, #filter-chips-us .filter-chip, #filter-chips-jp .filter-chip');
+  const allFilterChips = () => document.querySelectorAll('#filter-chips-insurance .filter-chip, #filter-chips-us .filter-chip, #filter-chips-jp .filter-chip, #filter-chips-index .filter-chip');
 
   document.getElementById('filter-all').addEventListener('click', () => {
     allFilterChips().forEach(chip => {
@@ -620,7 +633,7 @@ let comparisonChart = null;
 function updateComparison() {
   const section = document.getElementById('comparison-section');
   const selected = [];
-  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked').forEach(cb => {
+  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').forEach(cb => {
     selected.push(+cb.dataset.idx);
   });
 
@@ -942,6 +955,7 @@ function toggleFundView(btn) {
     insurance: document.getElementById('corr-selector-insurance'),
     us: document.getElementById('corr-selector-us'),
     jp: document.getElementById('corr-selector-jp'),
+    index: document.getElementById('corr-selector-index'),
   };
   const corrCurrencyState = {};
   FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) corrCurrencyState[i] = f.currency === 'USD' ? 'krw' : 'orig'; });
@@ -973,7 +987,7 @@ function toggleFundView(btn) {
   function updateCorrMatrix() {
     const el = document.getElementById('corr-result');
     const selected = [];
-    document.querySelectorAll('#corr-selector-insurance input:checked, #corr-selector-us input:checked, #corr-selector-jp input:checked').forEach(cb => {
+    document.querySelectorAll('#corr-selector-insurance input:checked, #corr-selector-us input:checked, #corr-selector-jp input:checked, #corr-selector-index input:checked').forEach(cb => {
       selected.push(+cb.dataset.idx);
     });
 
@@ -1040,6 +1054,7 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) pfFundCurrency[i] = f.curren
     insurance: document.getElementById('fund-selector-insurance'),
     us: document.getElementById('fund-selector-us'),
     jp: document.getElementById('fund-selector-jp'),
+    index: document.getElementById('fund-selector-index'),
   };
   FUNDS.forEach((fund, idx) => {
     const row = document.createElement('div');
@@ -1071,7 +1086,7 @@ function getPfFundData(fund, idx, key) {
 }
 
 function getSelections() {
-  const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row');
+  const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row, #fund-selector-index .fund-row');
   const sel = [];
   rows.forEach(row => {
     const cb = row.querySelector('input[type=checkbox]');
@@ -1672,6 +1687,98 @@ function renderYearlyBreakdown(selections, pf) {
     </div>`;
 }
 
+// ── Portfolio Presets (localStorage) ──
+const PRESET_KEY = 'fund_dashboard_presets';
+const MAX_PRESETS = 5;
+
+function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESET_KEY)) || []; }
+  catch { return []; }
+}
+
+function savePresets(presets) {
+  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+}
+
+function getCurrentConfig() {
+  const sel = getSelections();
+  if (sel.length === 0) return null;
+  return sel.map(s => ({
+    idx: s.idx,
+    weight: s.weight,
+    ccy: pfFundCurrency[s.idx] || 'orig',
+    name: FUNDS[s.idx].shortName || FUNDS[s.idx].name,
+  }));
+}
+
+function applyPreset(preset) {
+  // Clear all
+  document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row, #fund-selector-index .fund-row').forEach(row => {
+    const cb = row.querySelector('input[type=checkbox]');
+    const num = row.querySelector('input[type=number]');
+    if (cb) cb.checked = false;
+    if (num) num.value = '';
+  });
+
+  // Apply preset
+  preset.items.forEach(item => {
+    const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row, #fund-selector-index .fund-row');
+    rows.forEach(row => {
+      const cb = row.querySelector('input[type=checkbox]');
+      if (cb && +cb.dataset.idx === item.idx) {
+        cb.checked = true;
+        row.querySelector('input[type=number]').value = Math.round(item.weight * 100);
+        // Set currency
+        pfFundCurrency[item.idx] = item.ccy;
+        const ccyBtns = row.querySelectorAll('.currency-toggle .btn-currency');
+        ccyBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === item.ccy));
+      }
+    });
+  });
+  updateWeightSum();
+}
+
+function renderPresetChips() {
+  const container = document.getElementById('preset-chips');
+  const presets = loadPresets();
+  container.innerHTML = '';
+  presets.forEach((preset, i) => {
+    const chip = document.createElement('label');
+    chip.className = 'filter-chip preset-chip';
+    chip.innerHTML = `${preset.name}<span class="preset-del" data-idx="${i}">&times;</span>`;
+    chip.addEventListener('click', (e) => {
+      if (e.target.classList.contains('preset-del')) {
+        const presets = loadPresets();
+        presets.splice(+e.target.dataset.idx, 1);
+        savePresets(presets);
+        renderPresetChips();
+        return;
+      }
+      applyPreset(preset);
+    });
+    container.appendChild(chip);
+  });
+  document.getElementById('btn-save-preset').disabled = false;
+}
+
+document.getElementById('btn-save-preset').addEventListener('click', () => {
+  const config = getCurrentConfig();
+  if (!config) return;
+  const presets = loadPresets();
+  if (presets.length >= MAX_PRESETS) {
+    if (!confirm(`최대 ${MAX_PRESETS}개까지 저장 가능합니다. 가장 오래된 프리셋을 삭제하고 저장할까요?`)) return;
+    presets.shift();
+  }
+  const label = config.map(c => c.name + Math.round(c.weight*100)).join('/');
+  const name = prompt('프리셋 이름:', label);
+  if (!name) return;
+  presets.push({ name, items: config });
+  savePresets(presets);
+  renderPresetChips();
+});
+
+renderPresetChips();
+
 document.getElementById('btn-analyze').addEventListener('click', () => {
   const sel = getSelections();
   if (sel.length === 0) return;
@@ -1873,6 +1980,7 @@ def render_html(fund_results: list[dict], risk_free: float) -> str:
             "shortName": f["fund_cd"] if f["member_cd"] == "BENCH" else f["name"],
             "hasKrw": f.get("has_krw", False),
             "isBench": f["member_cd"] == "BENCH",
+            "region": f.get("region", ""),
             "currency": f.get("currency_label", "KRW"),
         }
         if f.get("krw"):
@@ -1933,7 +2041,8 @@ def main() -> None:
             for row in csv.DictReader(f):
                 if row.get("fundCd"):
                     benchmarks.append({"memberCd": "BENCH", "fundCd": row["fundCd"],
-                                       "name": row.get("name") or row["fundCd"]})
+                                       "name": row.get("name") or row["fundCd"],
+                                       "region": row.get("region", "")})
                     ccy = row.get("currency", "").upper()
                     if ccy and ccy != "KRW":
                         fund_currency[row["fundCd"]] = ccy
@@ -1989,6 +2098,7 @@ def main() -> None:
         )
         if result:
             result["currency_label"] = ccy or "KRW"
+            result["region"] = f.get("region", "")
             # Add JPY analysis
             if jpy_nav is not None and len(jpy_nav) >= 30:
                 result["has_jpy"] = True
