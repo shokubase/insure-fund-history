@@ -405,7 +405,12 @@ HTML_TEMPLATE = """\
 <section class="fund-section" id="comparison-section" style="display:none;">
   <h2>자산 비교</h2>
   <p class="fund-meta" id="comparison-meta"></p>
-  <div class="chart-container" style="height:400px;"><canvas id="comparison-chart"></canvas></div>
+  <div class="chart-container" style="height:400px;position:relative;">
+    <canvas id="comparison-chart"></canvas>
+    <div id="comp-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(37,99,235,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
+    <div id="comp-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;max-height:80%;overflow-y:auto;"></div>
+  </div>
+  <p style="font-size:0.75rem;color:#999;margin-top:-0.5rem;">차트에서 드래그하여 구간 비교</p>
 </section>
 
 %%FUND_SECTIONS%%
@@ -632,6 +637,7 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
 // ── Asset Comparison Chart ──
 const COMPARISON_COLORS = ['#2563eb','#dc2626','#16a34a','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1','#14b8a6'];
 let comparisonChart = null;
+let compFullDates = [], compFullNavs = [], compSelectedIdxs = [];
 
 function updateComparison() {
   const section = document.getElementById('comparison-section');
@@ -673,6 +679,11 @@ function updateComparison() {
   const step = Math.max(1, Math.floor(chartDates.length / 600));
   const dsDates = chartDates.filter((_, i) => i % step === 0);
 
+  // Store full data for drag-select
+  compFullDates = chartDates;
+  compFullNavs = datasets;
+  compSelectedIdxs = selected;
+
   document.getElementById('comparison-meta').textContent =
     `공통 기간: ${common[0]} ~ ${common[common.length-1]} | 시작점 = 100으로 정규화`;
 
@@ -681,7 +692,7 @@ function updateComparison() {
     return {
       label: FUNDS[idx].shortName || FUNDS[idx].name,
       data: dsNav.map(v => +v.toFixed(2)),
-      borderColor: COMPARISON_COLORS[si % COMPARISON_COLORS.length],
+      borderColor: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
       backgroundColor: 'transparent',
       fill: false, pointRadius: 0, borderWidth: 1.8,
     };
@@ -701,6 +712,62 @@ function updateComparison() {
     }
   });
 }
+
+// Drag-select for comparison chart
+(function() {
+  const canvas = document.getElementById('comparison-chart');
+  const overlay = document.getElementById('comp-overlay');
+  const statsBox = document.getElementById('comp-stats');
+  let dragStart = null, dragging = false;
+
+  function clear() { overlay.style.display = 'none'; statsBox.style.display = 'none'; }
+
+  function showStats(d1, d2) {
+    if (compFullDates.length === 0) return;
+    let si = compFullDates.findIndex(d => d >= d1);
+    let ei = compFullDates.length - 1;
+    for (let i = compFullDates.length - 1; i >= 0; i--) { if (compFullDates[i] <= d2) { ei = i; break; } }
+    if (si < 0 || si >= ei || ei - si < 2) { statsBox.style.display = 'none'; return; }
+
+    const pc = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
+    let html = `<div style="font-weight:600;margin-bottom:0.3rem;">${compFullDates[si]} ~ ${compFullDates[ei]}</div>`;
+    compSelectedIdxs.forEach((idx, ai) => {
+      const nav = compFullNavs[ai];
+      const ret = ((nav[ei] / nav[si] - 1) * 100).toFixed(2);
+      const color = COMPARISON_COLORS[idx % COMPARISON_COLORS.length];
+      html += `<div><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:4px;"></span>${FUNDS[idx].shortName || FUNDS[idx].name}: <b class="${pc(ret)}">${+ret > 0 ? '+' : ''}${ret}%</b></div>`;
+    });
+    statsBox.innerHTML = html;
+    statsBox.style.display = 'block';
+  }
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (!comparisonChart) return;
+    const rect = canvas.getBoundingClientRect(), x = e.clientX - rect.left;
+    if (x < comparisonChart.chartArea.left || x > comparisonChart.chartArea.right) return;
+    dragStart = x; dragging = true;
+    overlay.style.display = 'block'; overlay.style.left = x + 'px'; overlay.style.width = '0px';
+    statsBox.style.display = 'none';
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    if (!dragging || !comparisonChart) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(comparisonChart.chartArea.left, Math.min(e.clientX - rect.left, comparisonChart.chartArea.right));
+    overlay.style.left = Math.min(dragStart, x) + 'px'; overlay.style.width = Math.abs(x - dragStart) + 'px';
+  });
+  canvas.addEventListener('mouseup', (e) => {
+    if (!dragging || !comparisonChart) return;
+    dragging = false;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(comparisonChart.chartArea.left, Math.min(e.clientX - rect.left, comparisonChart.chartArea.right));
+    if (Math.abs(x - dragStart) < 5) { clear(); return; }
+    const scale = comparisonChart.scales.x;
+    const d1 = new Date(scale.getValueForPixel(Math.min(dragStart, x))).toISOString().slice(0, 10);
+    const d2 = new Date(scale.getValueForPixel(Math.max(dragStart, x))).toISOString().slice(0, 10);
+    showStats(d1, d2);
+  });
+  canvas.addEventListener('mouseleave', () => { if (dragging) dragging = false; });
+})();
 
 function renderChart(canvasId, labels, data, color, opts) {
   const ctx = document.getElementById(canvasId);
