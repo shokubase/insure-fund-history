@@ -411,6 +411,7 @@ HTML_TEMPLATE = """\
     <div id="comp-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;max-height:80%;overflow-y:auto;"></div>
   </div>
   <p style="font-size:0.75rem;color:#999;margin-top:-0.5rem;">차트에서 드래그하여 구간 비교</p>
+  <div id="comparison-summary"></div>
 </section>
 
 %%FUND_SECTIONS%%
@@ -711,6 +712,129 @@ function updateComparison() {
       plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 11 } } } }
     }
   });
+
+  // Render summary table
+  renderComparisonSummary(selected, chartDates, datasets);
+}
+
+function renderComparisonSummary(selected, dates, navSets) {
+  const el = document.getElementById('comparison-summary');
+  if (selected.length < 2 || dates.length < 30) { el.innerHTML = ''; return; }
+
+  const n = dates.length;
+  const totalDays = (new Date(dates[n-1]) - new Date(dates[0])) / 86400000;
+  const totalYears = totalDays / 365.25;
+
+  // Per-asset metrics
+  const metrics = selected.map((idx, si) => {
+    const nav = navSets[si];
+    const daily = getPfFundData(FUNDS[idx], idx, 'daily');
+
+    // Period (from asset's own data, not common)
+    const firstDate = daily.dates[0];
+    const lastDate = daily.dates[daily.dates.length - 1];
+
+    // CAGR (from common period normalized NAV)
+    const cagr = (Math.pow(nav[n-1] / nav[0], 1 / totalYears) - 1) * 100;
+
+    // Volatility (from common period)
+    const dr = [];
+    for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i-1] - 1);
+    const mean = dr.reduce((s,v) => s+v, 0) / dr.length;
+    const variance = dr.reduce((s,v) => s + (v-mean)**2, 0) / (dr.length - 1);
+    const af = dr.length / totalYears;
+    const vol = Math.sqrt(variance) * Math.sqrt(af) * 100;
+
+    // MDD
+    let peak = nav[0], mdd = 0;
+    for (const v of nav) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v - peak) / peak); }
+
+    // Average drawdown
+    let inDd = false, ddDepths = [];
+    let ddPeak = nav[0];
+    for (let i = 0; i < nav.length; i++) {
+      ddPeak = Math.max(ddPeak, nav[i]);
+      const dd = (nav[i] - ddPeak) / ddPeak;
+      if (!inDd && dd < 0) { inDd = true; }
+      else if (inDd && dd >= 0) { inDd = false; }
+      if (inDd) ddDepths.push(dd);
+    }
+    const avgDd = ddDepths.length > 0 ? (ddDepths.reduce((s,v)=>s+v,0)/ddDepths.length)*100 : 0;
+
+    return {
+      idx, name: chipLabel(FUNDS[idx]),
+      color: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
+      firstDate, cagr, vol, mdd: mdd * 100, avgDd,
+    };
+  });
+
+  // Monthly correlation matrix (using monthly data)
+  const monthlyData = selected.map(idx => {
+    const m = getPfFundData(FUNDS[idx], idx, 'monthly');
+    const map = {};
+    m.dates.forEach((d, i) => { map[d] = m.returns[i]; });
+    return { dates: new Set(m.dates), map };
+  });
+  let commonM = [...monthlyData[0].dates].filter(d => monthlyData.every(m => m.dates.has(d))).sort();
+
+  const pc = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
+  const fp = (v, s) => (s && v > 0 ? '+' : '') + v.toFixed(2) + '%';
+
+  // Summary table
+  let header = '<tr><th></th>';
+  metrics.forEach(m => { header += `<th><span style="color:${m.color};">●</span> ${m.name}</th>`; });
+  header += '</tr>';
+
+  let rows = '';
+  // Row: 데이터 시작
+  rows += '<tr><td>데이터 시작</td>';
+  metrics.forEach(m => { rows += `<td>${m.firstDate}</td>`; });
+  rows += '</tr>';
+  // Row: CAGR
+  rows += '<tr><td>CAGR</td>';
+  metrics.forEach(m => { rows += `<td class="${pc(m.cagr)}">${fp(m.cagr, true)}</td>`; });
+  rows += '</tr>';
+  // Row: Volatility
+  rows += '<tr><td>변동성</td>';
+  metrics.forEach(m => { rows += `<td>${m.vol.toFixed(2)}%</td>`; });
+  rows += '</tr>';
+  // Row: MDD
+  rows += '<tr><td>MDD</td>';
+  metrics.forEach(m => { rows += `<td class="negative">${m.mdd.toFixed(2)}%</td>`; });
+  rows += '</tr>';
+  // Row: Avg Drawdown
+  rows += '<tr><td>평균 드로다운</td>';
+  metrics.forEach(m => { rows += `<td class="negative">${m.avgDd.toFixed(2)}%</td>`; });
+  rows += '</tr>';
+
+  // Correlation matrix rows
+  if (commonM.length >= 6) {
+    const arrays = monthlyData.map(m => commonM.map(d => m.map[d]));
+    const means = arrays.map(arr => arr.reduce((s,v)=>s+v,0)/commonM.length);
+
+    metrics.forEach((m1, i) => {
+      rows += `<tr><td>상관: ${m1.name}</td>`;
+      metrics.forEach((m2, j) => {
+        if (i === j) { rows += '<td>1.00</td>'; return; }
+        let sXY=0,sX2=0,sY2=0;
+        for (let k=0;k<commonM.length;k++) {
+          const dx=arrays[i][k]-means[i], dy=arrays[j][k]-means[j];
+          sXY+=dx*dy; sX2+=dx*dx; sY2+=dy*dy;
+        }
+        const corr = Math.sqrt(sX2*sY2)>0 ? sXY/Math.sqrt(sX2*sY2) : 0;
+        rows += `<td>${corr.toFixed(2)}</td>`;
+      });
+      rows += '</tr>';
+    });
+  }
+
+  el.innerHTML = `
+    <h3>요약 비교 (공통 기간 ${dates[0]} ~ ${dates[n-1]})</h3>
+    <div style="overflow-x:auto;">
+    <table style="font-size:0.8rem;min-width:100%;">
+      ${header}${rows}
+    </table>
+    </div>`;
 }
 
 // Drag-select for comparison chart
