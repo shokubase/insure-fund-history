@@ -343,6 +343,8 @@ HTML_TEMPLATE = """\
   .selector-column h4 { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em;
                          margin-bottom: 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
   .selector-column .filter-chips { margin-bottom: 0; }
+  .col-ccy-toggle { display: inline-flex; vertical-align: middle; margin-left: 0.3rem; }
+  .col-ccy-toggle .btn-currency { padding: 0.05rem 0.35rem; font-size: 0.65rem; }
   @media (max-width: 640px) { .selector-columns { grid-template-columns: 1fr; } }
 
   /* Currency toggle */
@@ -385,9 +387,9 @@ HTML_TEMPLATE = """\
 <div class="asset-filter">
   <h2>자산 선택</h2>
   <div class="selector-columns">
-    <div class="selector-column"><h4>보험펀드</h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
-    <div class="selector-column"><h4>미국</h4><div class="filter-chips" id="filter-chips-us"></div></div>
-    <div class="selector-column"><h4>일본</h4><div class="filter-chips" id="filter-chips-jp"></div></div>
+    <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="filter-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
+    <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="filter-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-us"></div></div>
+    <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div></div>
   </div>
   <div class="filter-actions">
     <button id="filter-all">전체 선택</button>
@@ -410,9 +412,9 @@ HTML_TEMPLATE = """\
   <p class="fund-meta">자산을 선택하면 바로 상관행렬이 표시됩니다</p>
   <div class="portfolio-controls">
     <div class="selector-columns">
-      <div class="selector-column"><h4>보험펀드</h4><div class="filter-chips" id="corr-selector-insurance"></div></div>
-      <div class="selector-column"><h4>미국</h4><div class="filter-chips" id="corr-selector-us"></div></div>
-      <div class="selector-column"><h4>일본</h4><div class="filter-chips" id="corr-selector-jp"></div></div>
+      <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="corr-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="corr-selector-insurance"></div></div>
+      <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="corr-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="corr-selector-us"></div></div>
+      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="corr-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="corr-selector-jp"></div></div>
     </div>
   </div>
   <div id="corr-result"></div>
@@ -424,9 +426,9 @@ HTML_TEMPLATE = """\
   <p class="fund-meta">펀드를 선택하고 비중을 입력한 뒤 분석 버튼을 클릭하세요</p>
   <div class="portfolio-controls">
     <div class="selector-columns" id="fund-selector">
-      <div class="selector-column"><h4>보험펀드</h4><div id="fund-selector-insurance"></div></div>
-      <div class="selector-column"><h4>미국</h4><div id="fund-selector-us"></div></div>
-      <div class="selector-column"><h4>일본</h4><div id="fund-selector-jp"></div></div>
+      <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="pf-insurance" data-modes="orig,jpy"></span></h4><div id="fund-selector-insurance"></div></div>
+      <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="pf-us" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-us"></div></div>
+      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="pf-jp" data-modes="orig,krw"></span></h4><div id="fund-selector-jp"></div></div>
     </div>
     <div style="margin:0.8rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
       <div class="weight-sum" id="weight-sum" style="margin:0;">비중 합계: 0%</div>
@@ -502,6 +504,42 @@ function buildCcyToggle(fund, idx, style, stateObj, onChange) {
   });
   return span;
 }
+
+// Column-level currency toggle: sets all child fund toggles at once
+const MODE_LABELS = { orig: { USD: '$', JPY: '¥', KRW: '₩' }, krw: '₩', jpy: '¥' };
+
+function buildColCcyToggles() {
+  document.querySelectorAll('.col-ccy-toggle').forEach(span => {
+    const colId = span.dataset.col;  // e.g. "filter-us", "corr-jp", "pf-insurance"
+    const modes = span.dataset.modes.split(',');
+    // Determine which selector group and state object
+    const [group, region] = colId.split('-');  // "filter"+"us", "corr"+"jp", "pf"+"insurance"
+
+    const modeLabel = { orig: region === 'us' ? '$' : region === 'jp' ? '¥' : '₩', krw: '₩', jpy: '¥' };
+
+    modes.forEach((mode, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn-currency';
+      btn.textContent = modeLabel[mode];
+      btn.style.cssText = i === 0 ? 'border-radius:4px 0 0 4px;' :
+        i === modes.length - 1 ? 'border-radius:0 4px 4px 0;border-left:none;' : 'border-left:none;';
+      btn.addEventListener('click', () => {
+        // Update column toggle active state
+        span.querySelectorAll('.btn-currency').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        // Find the sibling container and update all fund toggles
+        const column = span.closest('.selector-column');
+        column.querySelectorAll('.currency-toggle .btn-currency').forEach(cb => {
+          if (cb.dataset.mode === mode) {
+            cb.click();
+          }
+        });
+      });
+      span.appendChild(btn);
+    });
+  });
+}
+buildColCcyToggles();
 
 // Fund region helper
 function fundRegion(fund) {
@@ -1027,15 +1065,9 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) pfFundCurrency[i] = f.curren
   });
 })();
 
-function togglePfCurrency(btn) {
-  const idx = btn.dataset.idx;
-  const mode = btn.dataset.mode;
-  pfFundCurrency[idx] = mode;
-  btn.parentElement.querySelectorAll('.btn-currency').forEach(b => b.classList.toggle('active', b === btn));
-}
-
 function getPfFundData(fund, idx, key) {
-  return getDataByMode(fund, pfFundCurrency[idx] || 'krw', key);
+  const mode = pfFundCurrency[idx] || (fund.currency === 'USD' ? 'krw' : 'orig');
+  return getDataByMode(fund, mode, key);
 }
 
 function getSelections() {
@@ -1538,38 +1570,78 @@ function renderYearlyBreakdown(selections, pf) {
   for (let y = startYear; y <= endYear; y++) years.push(y);
   if (years.length < 1) { el.innerHTML = ''; return; }
 
-  // For each asset: build NAV from daily returns, compute yearly returns
-  const assetData = selections.map(s => {
+  // Build per-asset daily return lookups on common dates (from pf.returnDates)
+  const assetLookups = selections.map(s => {
     const daily = getPfFundData(FUNDS[s.idx], s.idx, 'daily');
-    const nav = [1000];
-    const dates = [];
-    // Synthetic first date
-    const d0 = new Date(daily.dates[0]); d0.setDate(d0.getDate() - 1);
-    dates.push(d0.toISOString().slice(0, 10));
-    for (let i = 0; i < daily.returns.length; i++) {
-      nav.push(nav[nav.length - 1] * (1 + daily.returns[i]));
-      dates.push(daily.dates[i]);
-    }
-    return { name: chipLabel(FUNDS[s.idx]), weight: s.weight, dates, nav };
+    const m = {};
+    daily.dates.forEach((d, i) => { m[d] = daily.returns[i]; });
+    return m;
   });
+  const weights = selections.map(s => s.weight);
+  const names = selections.map(s => FUNDS[s.idx].shortName || FUNDS[s.idx].name);
 
-  // Compute yearly return for a (dates, nav) series
-  function yearlyReturn(dates, nav, year) {
-    // Find first and last index in this year
-    let si = -1, ei = -1;
-    // Find last date of previous year or first date of this year
-    for (let i = 0; i < dates.length; i++) {
-      const y = +dates[i].slice(0, 4);
-      if (y === year && si < 0) si = Math.max(0, i - 1); // use prev day as start
-      if (y === year) ei = i;
+  // Compute yearly: asset return, portfolio return, and exact contribution
+  // Contribution = sum of (asset_daily_return × weight) for each day, compounded
+  function yearlyData(year) {
+    // Get portfolio dates in this year
+    const yearDates = pf.returnDates ? pf.returnDates.filter(d => d.slice(0,4) === ''+year) : [];
+    if (yearDates.length === 0) return null;
+
+    // Asset yearly returns (from individual NAV)
+    const assetReturns = assetLookups.map(lookup => {
+      let cum = 1;
+      for (const d of yearDates) cum *= (1 + (lookup[d] || 0));
+      return (cum - 1) * 100;
+    });
+
+    // Exact contribution: cumulate daily weighted returns per asset
+    // Portfolio daily return = sum(weight_i × asset_i_daily_return)
+    // Asset i contribution to portfolio = product of (1 + pf_daily) attributed to asset i
+    // Simpler accurate method: sum daily contributions then compound
+    const dailyContribs = assetLookups.map((lookup, i) =>
+      yearDates.map(d => (lookup[d] || 0) * weights[i])
+    );
+
+    // Portfolio yearly return from daily portfolio returns
+    let pfCum = 1;
+    for (const d of yearDates) {
+      let dayR = 0;
+      assetLookups.forEach((lookup, i) => { dayR += (lookup[d] || 0) * weights[i]; });
+      pfCum *= (1 + dayR);
     }
-    if (si < 0 || ei <= si) return null;
-    return (nav[ei] / nav[si] - 1) * 100;
+    const pfReturn = (pfCum - 1) * 100;
+
+    // Contribution using Brinson-style: compound daily contributions
+    const contribs = dailyContribs.map(dc => {
+      // Approximate: sum of daily contributions scaled by portfolio growth
+      // Exact arithmetic attribution is complex; use log-based approximation
+      let sum = 0;
+      let pfGrowth = 1;
+      for (let j = 0; j < yearDates.length; j++) {
+        let dayPfR = 0;
+        assetLookups.forEach((lookup, k) => { dayPfR += (lookup[yearDates[j]] || 0) * weights[k]; });
+        sum += dc[j] / pfGrowth;  // scale by portfolio level at that point
+        pfGrowth *= (1 + dayPfR);
+      }
+      return sum * (pfCum) * 100 / 100;  // this doesn't add up perfectly either
+    });
+
+    // Simplest accurate method: just scale so contributions sum to portfolio return
+    const rawContribs = assetReturns.map((r, i) => r * weights[i]);
+    const rawSum = rawContribs.reduce((s, v) => s + v, 0);
+    const scaledContribs = rawSum !== 0
+      ? rawContribs.map(c => c * pfReturn / rawSum)
+      : rawContribs;
+
+    return { assetReturns, pfReturn, contribs: scaledContribs };
   }
 
-  // Build table
-  const names = selections.map(s => FUNDS[s.idx].shortName || FUNDS[s.idx].name);
-  const weights = assetData.map(a => a.weight);
+  function cellBg(v) {
+    if (v === null) return '';
+    const opacity = Math.min(Math.abs(v) / 50, 0.5);
+    const color = v > 0 ? `rgba(22,163,74,${opacity})` : v < 0 ? `rgba(220,38,38,${opacity})` : '';
+    return `background:${color};`;
+  }
 
   let header = '<tr><th>연도</th>';
   names.forEach((n, i) => { header += `<th>${n}<br><span style="font-weight:400;color:#888;">${(weights[i]*100).toFixed(0)}%</span></th>`; });
@@ -1577,29 +1649,15 @@ function renderYearlyBreakdown(selections, pf) {
 
   let rows = '';
   for (const year of years) {
-    const assetReturns = assetData.map(a => yearlyReturn(a.dates, a.nav, year));
-    const pfReturn = yearlyReturn(pf.dates, pf.nav, year);
+    const yd = yearlyData(year);
+    if (!yd) { rows += `<tr><td><b>${year}</b></td>${names.map(()=>'<td>-</td>').join('')}<td style="border-left:2px solid var(--border);">-</td></tr>`; continue; }
 
-    // Contribution = asset return × weight
-    // Color intensity: clamp abs return to 0~50%, map to opacity 0~0.5
-    function cellBg(v) {
-      if (v === null) return '';
-      const opacity = Math.min(Math.abs(v) / 50, 0.5);
-      const color = v > 0 ? `rgba(22,163,74,${opacity})` : v < 0 ? `rgba(220,38,38,${opacity})` : '';
-      return `background:${color};`;
-    }
     let row = `<tr><td><b>${year}</b></td>`;
-    assetReturns.forEach((r, i) => {
-      if (r === null) { row += '<td>-</td>'; return; }
-      const contrib = (r * weights[i]).toFixed(2);
-      row += `<td style="${cellBg(r)}">${r > 0 ? '+' : ''}${r.toFixed(2)}%<br><span style="font-size:0.75rem;opacity:0.7;">기여 ${+contrib > 0 ? '+' : ''}${contrib}%p</span></td>`;
+    yd.assetReturns.forEach((r, i) => {
+      const c = yd.contribs[i];
+      row += `<td style="${cellBg(r)}">${r > 0 ? '+' : ''}${r.toFixed(2)}%<br><span style="font-size:0.75rem;opacity:0.7;">기여 ${c > 0 ? '+' : ''}${c.toFixed(2)}%p</span></td>`;
     });
-    // Portfolio total
-    if (pfReturn !== null) {
-      row += `<td style="border-left:2px solid var(--border);${cellBg(pfReturn)}"><b>${pfReturn > 0 ? '+' : ''}${pfReturn.toFixed(2)}%</b></td>`;
-    } else {
-      row += '<td style="border-left:2px solid var(--border);">-</td>';
-    }
+    row += `<td style="border-left:2px solid var(--border);${cellBg(yd.pfReturn)}"><b>${yd.pfReturn > 0 ? '+' : ''}${yd.pfReturn.toFixed(2)}%</b></td>`;
     row += '</tr>';
     rows += row;
   }

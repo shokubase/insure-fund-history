@@ -100,7 +100,75 @@ def main() -> None:
         total += n
         print(f"[{name}] {n} rows")
 
+    # Post-processing: fix known stock splits not handled by yfinance
+    _fix_splits(conn)
+
     print(f"\nDone. Total {total} rows across {len(benchmarks)} benchmark(s).")
+
+
+# Known splits and bad data points in yfinance
+SPLIT_FIXES = [
+    # (fundCd, split_date, divisor) — divide all data before split_date by divisor
+    ("1329", "2014-01-06", 10),
+    ("1656", "2017-09-28", 10),
+]
+BAD_DATA_FIXES = [
+    # (fundCd, date, multiplier) — multiply nav by multiplier to fix
+    ("1656", "2022-10-07", 10),
+    ("1656", "2022-10-11", 10),
+]
+SPIKE_CLEANUP = [
+    # (fundCd, max_pct) — delete 1-day spikes exceeding max_pct
+    ("1322", 15),
+]
+
+
+def _fix_splits(conn):
+    """Apply known split adjustments and data fixes after fetch."""
+    for fund_cd, split_date, divisor in SPLIT_FIXES:
+        cur = conn.execute(
+            "SELECT MAX(nav) FROM fund_nav WHERE fund_cd=? AND std_ymd<?",
+            (fund_cd, split_date),
+        )
+        max_nav = cur.fetchone()[0]
+        if max_nav and max_nav > 500 * divisor:
+            conn.execute(
+                "UPDATE fund_nav SET nav = nav / ? WHERE fund_cd=? AND std_ymd<?",
+                (divisor, fund_cd, split_date),
+            )
+            logger.info("Fixed split for %s before %s (÷%d)", fund_cd, split_date, divisor)
+
+    for fund_cd, bad_date, multiplier in BAD_DATA_FIXES:
+        cur = conn.execute(
+            "SELECT nav FROM fund_nav WHERE fund_cd=? AND std_ymd=?",
+            (fund_cd, bad_date),
+        )
+        row = cur.fetchone()
+        if row and row[0] < 100:
+            conn.execute(
+                "UPDATE fund_nav SET nav = nav * ? WHERE fund_cd=? AND std_ymd=?",
+                (multiplier, fund_cd, bad_date),
+            )
+            logger.info("Fixed bad data for %s on %s (×%d)", fund_cd, bad_date, multiplier)
+
+    for fund_cd, max_pct in SPIKE_CLEANUP:
+        threshold = max_pct / 100
+        cur = conn.execute(f"""
+            DELETE FROM fund_nav WHERE rowid IN (
+                SELECT a.rowid FROM fund_nav a
+                JOIN fund_nav b ON a.fund_cd = b.fund_cd
+                    AND b.std_ymd = (SELECT MAX(std_ymd) FROM fund_nav WHERE fund_cd=? AND std_ymd < a.std_ymd)
+                JOIN fund_nav c ON a.fund_cd = c.fund_cd
+                    AND c.std_ymd = (SELECT MIN(std_ymd) FROM fund_nav WHERE fund_cd=? AND std_ymd > a.std_ymd)
+                WHERE a.fund_cd = ?
+                AND ABS(a.nav / b.nav - 1) > ?
+                AND ABS(c.nav / a.nav - 1) > ?
+            )
+        """, (fund_cd, fund_cd, fund_cd, threshold, threshold))
+        if cur.rowcount > 0:
+            logger.info("Removed %d spike rows from %s", cur.rowcount, fund_cd)
+
+    conn.commit()
 
 
 if __name__ == "__main__":
