@@ -572,6 +572,13 @@ function chipLabel(fund) {
   if (fund.currency === 'JPY' && fund.isBench) return fund.name;  // JPY: show full name (숫자 코드만으로는 식별 어려움)
   return fund.shortName || fund.name;
 }
+function compactLabel(fund) {
+  // Short code only: N760, 1329, SPY, KS200, etc.
+  if (fund.isBench) return fund.shortName;
+  // Insurance: extract code from name like "달러미국채형(환오픈형)(N760)" → "N760"
+  const m = fund.name.match(/\(([A-Z0-9]+)\)\s*$/);
+  return m ? m[1] : fund.shortName;
+}
 
 // ── Asset Filter ──
 const filterCurrencyState = {};
@@ -636,7 +643,15 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
 })();
 
 // ── Asset Comparison Chart ──
-const COMPARISON_COLORS = ['#2563eb','#dc2626','#16a34a','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1','#14b8a6'];
+const COMPARISON_COLORS = [
+  '#2563eb','#dc2626','#16a34a','#f59e0b','#8b5cf6',  // blue, red, green, amber, purple
+  '#ec4899','#06b6d4','#f97316','#6366f1','#14b8a6',  // pink, cyan, orange, indigo, teal
+  '#78350f','#0d9488','#b91c1c','#4338ca','#a3e635',  // brown, dark teal, dark red, dark indigo, lime
+  '#db2777','#0369a1','#c2410c','#7c3aed','#059669',  // magenta, dark blue, burnt orange, violet, emerald
+  '#d97706','#be185d','#1d4ed8','#b45309','#7e22ce',  // dark amber, rose, royal blue, dark orange, deep purple
+  '#15803d','#9333ea','#ea580c','#0891b2','#4f46e5',  // forest green, purple, deep orange, dark cyan, dark indigo
+  '#ca8a04','#e11d48','#2dd4bf',                       // gold, crimson, aqua
+];
 let comparisonChart = null;
 let compFullDates = [], compFullNavs = [], compSelectedIdxs = [];
 
@@ -762,7 +777,7 @@ function renderComparisonSummary(selected, dates, navSets) {
     const avgDd = ddDepths.length > 0 ? (ddDepths.reduce((s,v)=>s+v,0)/ddDepths.length)*100 : 0;
 
     return {
-      idx, name: chipLabel(FUNDS[idx]),
+      idx, name: compactLabel(FUNDS[idx]),
       color: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
       firstDate, cagr, vol, mdd: mdd * 100, avgDd,
     };
@@ -807,25 +822,45 @@ function renderComparisonSummary(selected, dates, navSets) {
   metrics.forEach(m => { rows += `<td class="negative">${m.avgDd.toFixed(2)}%</td>`; });
   rows += '</tr>';
 
-  // Correlation matrix rows
+  // Correlation matrix (separate heatmap table)
+  let corrHtml = '';
   if (commonM.length >= 6) {
     const arrays = monthlyData.map(m => commonM.map(d => m.map[d]));
     const means = arrays.map(arr => arr.reduce((s,v)=>s+v,0)/commonM.length);
 
-    metrics.forEach((m1, i) => {
-      rows += `<tr><td>상관: ${m1.name}</td>`;
-      metrics.forEach((m2, j) => {
-        if (i === j) { rows += '<td>1.00</td>'; return; }
+    // Compute full correlation matrix
+    const corrMatrix = [];
+    for (let i = 0; i < arrays.length; i++) {
+      const row = [];
+      for (let j = 0; j < arrays.length; j++) {
+        if (i === j) { row.push(1); continue; }
         let sXY=0,sX2=0,sY2=0;
         for (let k=0;k<commonM.length;k++) {
           const dx=arrays[i][k]-means[i], dy=arrays[j][k]-means[j];
           sXY+=dx*dy; sX2+=dx*dx; sY2+=dy*dy;
         }
-        const corr = Math.sqrt(sX2*sY2)>0 ? sXY/Math.sqrt(sX2*sY2) : 0;
-        rows += `<td>${corr.toFixed(2)}</td>`;
-      });
-      rows += '</tr>';
-    });
+        row.push(Math.sqrt(sX2*sY2)>0 ? sXY/Math.sqrt(sX2*sY2) : 0);
+      }
+      corrMatrix.push(row);
+    }
+
+    function corrCellStyle(v) {
+      if (v >= 1) return 'background:#1d4ed8;color:#fff;';
+      if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'#1a1a1a'};`;
+      return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'#1a1a1a'};`;
+    }
+
+    let corrHeader = '<tr><th></th>' + metrics.map(m => `<th><span style="color:${m.color};">●</span> ${m.name}</th>`).join('') + '</tr>';
+    let corrRows = corrMatrix.map((row, i) =>
+      '<tr><th><span style="color:' + metrics[i].color + ';">●</span> ' + metrics[i].name + '</th>' +
+      row.map(v => `<td style="${corrCellStyle(v)}text-align:center;padding:0.5rem;">${v.toFixed(2)}</td>`).join('') + '</tr>'
+    ).join('');
+
+    corrHtml = `
+      <h3>상관행렬 (월간 수익률, ${commonM.length}개월)</h3>
+      <table class="corr-table" style="font-size:0.8rem;">
+        ${corrHeader}${corrRows}
+      </table>`;
   }
 
   el.innerHTML = `
@@ -834,7 +869,8 @@ function renderComparisonSummary(selected, dates, navSets) {
     <table style="font-size:0.8rem;min-width:100%;">
       ${header}${rows}
     </table>
-    </div>`;
+    </div>
+    ${corrHtml}`;
 }
 
 // Drag-select for comparison chart
