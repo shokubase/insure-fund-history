@@ -416,20 +416,6 @@ HTML_TEMPLATE = """\
 
 %%FUND_SECTIONS%%
 
-<!-- Correlation Matrix Analyzer -->
-<section class="fund-section" id="corr-section">
-  <h2>상관행렬 분석</h2>
-  <p class="fund-meta">자산을 선택하면 바로 상관행렬이 표시됩니다</p>
-  <div class="portfolio-controls">
-    <div class="selector-columns">
-      <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="corr-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="corr-selector-insurance"></div></div>
-      <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="corr-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="corr-selector-us"></div></div>
-      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="corr-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="corr-selector-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="corr-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="corr-selector-index"></div></div>
-    </div>
-  </div>
-  <div id="corr-result"></div>
-</section>
-
 <!-- Portfolio Analyzer -->
 <section class="fund-section" id="portfolio">
   <h2>포트폴리오 분석</h2>
@@ -1191,99 +1177,6 @@ function toggleFundView(btn) {
   const target = document.getElementById(btn.dataset.view);
   if (target) target.style.display = '';
 }
-
-// ── Correlation Matrix Analyzer ──
-(function buildCorrSelector() {
-  const corrContainers = {
-    insurance: document.getElementById('corr-selector-insurance'),
-    us: document.getElementById('corr-selector-us'),
-    jp: document.getElementById('corr-selector-jp'),
-    index: document.getElementById('corr-selector-index'),
-  };
-  const corrCurrencyState = {};
-  FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) corrCurrencyState[i] = f.currency === 'USD' ? 'krw' : 'orig'; });
-
-  FUNDS.forEach((fund, idx) => {
-    const chip = document.createElement('label');
-    chip.className = 'filter-chip';
-    chip.dataset.idx = idx;
-    chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${chipLabel(fund)}`;
-
-    const cToggle = buildCcyToggle(fund, idx, 'margin:0 0 0 0.3rem;display:inline-flex;', corrCurrencyState, updateCorrMatrix);
-    if (cToggle) chip.appendChild(cToggle);
-
-    chip.addEventListener('click', (e) => {
-      if (e.target.classList.contains('btn-currency')) return;
-      setTimeout(() => {
-        const checked = chip.querySelector('input').checked;
-        chip.classList.toggle('active', checked);
-        updateCorrMatrix();
-      }, 0);
-    });
-    corrContainers[fundRegion(fund)].appendChild(chip);
-  });
-
-  function getCorrData(fund, idx, key) {
-    return getDataByMode(fund, corrCurrencyState[idx] || 'krw', key);
-  }
-
-  function updateCorrMatrix() {
-    const el = document.getElementById('corr-result');
-    const selected = [];
-    document.querySelectorAll('#corr-selector-insurance input:checked, #corr-selector-us input:checked, #corr-selector-jp input:checked, #corr-selector-index input:checked').forEach(cb => {
-      selected.push(+cb.dataset.idx);
-    });
-
-    if (selected.length < 2) { el.innerHTML = '<p style="color:#888;">2개 이상 선택하세요</p>'; return; }
-
-    // Build monthly return data
-    const fundData = selected.map(idx => {
-      const f = getCorrData(FUNDS[idx], idx, 'monthly');
-      const m = {};
-      f.dates.forEach((d, i) => { m[d] = f.returns[i]; });
-      return { name: FUNDS[idx].shortName, map: m, dates: new Set(f.dates) };
-    });
-
-    let common = [...fundData[0].dates].filter(d => fundData.every(f => f.dates.has(d))).sort();
-    if (common.length < 6) { el.innerHTML = '<p style="color:#888;">공통 기간 부족 (최소 6개월 필요)</p>'; return; }
-
-    const arrays = fundData.map(f => common.map(d => f.map[d]));
-    const n = common.length;
-    const names = fundData.map(f => f.name);
-    const means = arrays.map(arr => arr.reduce((s, v) => s + v, 0) / n);
-
-    const matrix = [];
-    for (let i = 0; i < arrays.length; i++) {
-      const row = [];
-      for (let j = 0; j < arrays.length; j++) {
-        let sumXY = 0, sumX2 = 0, sumY2 = 0;
-        for (let k = 0; k < n; k++) {
-          const dx = arrays[i][k] - means[i];
-          const dy = arrays[j][k] - means[j];
-          sumXY += dx * dy; sumX2 += dx * dx; sumY2 += dy * dy;
-        }
-        const denom = Math.sqrt(sumX2 * sumY2);
-        row.push(denom > 0 ? sumXY / denom : 0);
-      }
-      matrix.push(row);
-    }
-
-    function cellStyle(v) {
-      if (v >= 1) return 'background:#1d4ed8;color:#fff;';
-      if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'#1a1a1a'};`;
-      return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'#1a1a1a'};`;
-    }
-
-    const header = '<tr><th></th>' + names.map(n => `<th>${n}</th>`).join('') + '</tr>';
-    const rows = matrix.map((row, i) =>
-      '<tr><th>' + names[i] + '</th>' + row.map(v => `<td style="${cellStyle(v)}">${v.toFixed(2)}</td>`).join('') + '</tr>'
-    ).join('');
-
-    el.innerHTML = `
-      <p class="fund-meta">월간 수익률 기준 | 공통 기간: ${common[0]} ~ ${common[common.length-1]} (${n}개월)</p>
-      <table class="corr-table">${header}${rows}</table>`;
-  }
-})();
 
 // ── Portfolio Analyzer ──
 
