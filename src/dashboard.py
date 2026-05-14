@@ -1121,12 +1121,14 @@ function updateWeightSum() {
   if (common.length === 0) { info.textContent = '공통 기간 없음'; return; }
   const earliest = common[0];
   const latest = common[common.length - 1];
-  // Find which asset(s) determined the start date
-  const bottlenecks = sel.filter(s => {
+  // Find which asset(s) determined the start date (latest first date = bottleneck)
+  const startDates = sel.map(s => {
     const d = getPfFundData(FUNDS[s.idx], s.idx, 'daily');
-    return d.dates[0] >= earliest;
-  }).map(s => chipLabel(FUNDS[s.idx]));
-  const bottleneckStr = bottlenecks.length > 0 ? ` (${bottlenecks.join(', ')})` : '';
+    return { idx: s.idx, firstDate: d.dates[0] };
+  });
+  const latestFirst = startDates.reduce((a, b) => a.firstDate > b.firstDate ? a : b).firstDate;
+  const bottlenecks = startDates.filter(s => s.firstDate === latestFirst).map(s => chipLabel(FUNDS[s.idx]));
+  const bottleneckStr = ` (← ${bottlenecks.join(', ')})`;
   info.textContent = `공통 기간: ${earliest} ~ ${latest}${bottleneckStr}`;
   startInput.min = earliest; startInput.max = latest;
   endInput.min = earliest; endInput.max = latest;
@@ -1670,7 +1672,7 @@ function renderYearlyBreakdown(selections, pf) {
     let row = `<tr><td><b>${year}</b></td>`;
     yd.assetReturns.forEach((r, i) => {
       const c = yd.contribs[i];
-      row += `<td style="${cellBg(r)}">${r > 0 ? '+' : ''}${r.toFixed(2)}%<br><span style="font-size:0.75rem;opacity:0.7;">기여 ${c > 0 ? '+' : ''}${c.toFixed(2)}%p</span></td>`;
+      row += `<td style="${cellBg(r)}padding:0.3rem 0.4rem;">${r > 0 ? '+' : ''}${r.toFixed(1)}%<br><span style="font-size:0.65rem;opacity:0.6;">${c > 0 ? '+' : ''}${c.toFixed(1)}%p</span></td>`;
     });
     row += `<td style="border-left:2px solid var(--border);${cellBg(yd.pfReturn)}"><b>${yd.pfReturn > 0 ? '+' : ''}${yd.pfReturn.toFixed(2)}%</b></td>`;
     row += '</tr>';
@@ -1680,7 +1682,7 @@ function renderYearlyBreakdown(selections, pf) {
   el.innerHTML = `
     <h3>연도별 자산 수익률 및 기여도</h3>
     <div style="overflow-x:auto;">
-    <table style="min-width:100%;">
+    <table style="min-width:100%;font-size:0.75rem;line-height:1.3;">
       ${header}
       ${rows}
     </table>
