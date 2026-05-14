@@ -1148,8 +1148,8 @@ function updateWeightSum() {
   info.textContent = `공통 기간: ${earliest} ~ ${latest}${bottleneckStr}`;
   startInput.min = earliest; startInput.max = latest;
   endInput.min = earliest; endInput.max = latest;
-  if (!startInput.value || startInput.value < earliest) startInput.value = earliest;
-  if (!endInput.value || endInput.value > latest) endInput.value = latest;
+  if (!startInput.value || startInput.value < earliest || startInput.value > latest) startInput.value = earliest;
+  if (!endInput.value || endInput.value > latest || endInput.value < earliest) endInput.value = latest;
 }
 
 // Build portfolio NAV from weighted daily returns
