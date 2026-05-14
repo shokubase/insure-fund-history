@@ -479,12 +479,13 @@ function ccySym(fund) { return CCY_SYMBOL[fund.currency] || fund.currency; }
 function getDataByMode(fund, mode, key) {
   if (mode === 'krw' && fund.krw && fund.krw[key]) return fund.krw[key];
   if (mode === 'jpy' && fund.jpy && fund.jpy[key]) return fund.jpy[key];
+  if (mode === 'usd' && fund.usd && fund.usd[key]) return fund.usd[key];
   return fund[key];
 }
 
 // Build currency toggle buttons for a fund
 function buildCcyToggle(fund, idx, style, stateObj, onChange) {
-  if (!fund.hasKrw && !fund.hasJpy) return null;
+  if (!fund.hasKrw && !fund.hasJpy && !fund.hasUsd) return null;
   const span = document.createElement('span');
   span.className = 'currency-toggle';
   span.style.cssText = style;
@@ -492,6 +493,8 @@ function buildCcyToggle(fund, idx, style, stateObj, onChange) {
   const btnList = [];
   // Native currency button
   btnList.push({ mode: 'orig', label: ccySym(fund), active: defaultMode === 'orig' });
+  // USD button (for KRW assets)
+  if (fund.hasUsd) btnList.push({ mode: 'usd', label: '$', active: false });
   // KRW button (only if native is not KRW)
   if (fund.hasKrw) btnList.push({ mode: 'krw', label: '₩', active: defaultMode === 'krw' });
   // JPY button
@@ -895,15 +898,27 @@ function rebuildNav(dailyData) {
 function createSingleChart(idx) {
   const fund = FUNDS[idx];
 
-  // USD charts + drag-select
-  const usdNav = renderChart(`chart-${idx}-usd-nav`, fund.chart.dates, fund.chart.nav,
+  // Orig charts + drag-select
+  const origNav = renderChart(`chart-${idx}-orig-nav`, fund.chart.dates, fund.chart.nav,
     '#2563eb', { label: '기준가', bg: 'rgba(37,99,235,0.08)' });
-  renderChart(`chart-${idx}-usd-dd`, fund.chart.dates, fund.chart.drawdown,
+  renderChart(`chart-${idx}-orig-dd`, fund.chart.dates, fund.chart.drawdown,
     '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
-  fundCharts[`${idx}-usd`] = usdNav;
-  const usdFull = rebuildNav(fund.daily);
-  attachDragSelect(`chart-${idx}-usd-nav`, `chart-${idx}-usd-overlay`, `chart-${idx}-usd-stats`,
-    () => fundCharts[`${idx}-usd`], usdFull.dates, usdFull.nav);
+  fundCharts[`${idx}-orig`] = origNav;
+  const origFull = rebuildNav(fund.daily);
+  attachDragSelect(`chart-${idx}-orig-nav`, `chart-${idx}-orig-overlay`, `chart-${idx}-orig-stats`,
+    () => fundCharts[`${idx}-orig`], origFull.dates, origFull.nav);
+
+  // USD-converted charts + drag-select (for KRW assets)
+  if (fund.usd) {
+    const usdConvNav = renderChart(`chart-${idx}-usd-conv-nav`, fund.usd.chart.dates, fund.usd.chart.nav,
+      '#2563eb', { label: '기준가 (USD)', bg: 'rgba(37,99,235,0.08)' });
+    renderChart(`chart-${idx}-usd-conv-dd`, fund.usd.chart.dates, fund.usd.chart.drawdown,
+      '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+    fundCharts[`${idx}-usd-conv`] = usdConvNav;
+    const usdConvFull = rebuildNav(fund.usd.daily);
+    attachDragSelect(`chart-${idx}-usd-conv-nav`, `chart-${idx}-usd-conv-overlay`, `chart-${idx}-usd-conv-stats`,
+      () => fundCharts[`${idx}-usd-conv`], usdConvFull.dates, usdConvFull.nav);
+  }
 
   // KRW charts + drag-select
   if (fund.krw) {
@@ -930,7 +945,8 @@ function createSingleChart(idx) {
   }
 
   // Init trailing returns
-  initFundTrailing(`chart-${idx}-usd`, fund.daily);
+  initFundTrailing(`chart-${idx}-orig`, fund.daily);
+  if (fund.usd) initFundTrailing(`chart-${idx}-usd-conv`, fund.usd.daily);
   if (fund.krw) initFundTrailing(`chart-${idx}-krw`, fund.krw.daily);
   if (fund.jpy) initFundTrailing(`chart-${idx}-jpy`, fund.jpy.daily);
 }
@@ -1888,24 +1904,29 @@ def render_fund_section(fund: dict, idx: int) -> str:
     has_krw = fund.get("has_krw", False) and "krw" in fund
 
     # Currency toggle for foreign currency assets
+    has_usd = fund.get("has_usd", False) and "usd" in fund
     has_jpy = fund.get("has_jpy", False) and "jpy" in fund
     ccy_label = fund.get("currency_label", "USD")
-
-    is_krw_asset = ccy_label == "KRW" or ccy_label is None
-    is_jpy_asset = ccy_label == "JPY"
-    default_view = "orig"  # orig is always the native currency
+    default_view = "orig"
 
     toggle_html = ""
-    if has_krw or has_jpy:
+    if has_krw or has_usd or has_jpy:
         btns = f'<button class="btn-currency active" data-view="fund-{idx}-orig" onclick="toggleFundView(this)">{ccy_label or "KRW"}</button>'
+        if has_usd:
+            btns += f'<button class="btn-currency" data-view="fund-{idx}-usd-conv" onclick="toggleFundView(this)">USD</button>'
         if has_krw:
             btns += f'<button class="btn-currency" data-view="fund-{idx}-krw" onclick="toggleFundView(this)">KRW</button>'
         if has_jpy:
             btns += f'<button class="btn-currency" data-view="fund-{idx}-jpy" onclick="toggleFundView(this)">JPY</button>'
         toggle_html = f'<div class="currency-toggle" style="margin-bottom:1rem;" data-group="fund-{idx}">{btns}</div>'
 
-    orig_block = _render_analysis_block(fund, f"chart-{idx}-usd")
+    orig_block = _render_analysis_block(fund, f"chart-{idx}-orig")
     orig_div = f'<div id="fund-{idx}-orig">{orig_block}</div>'
+
+    usd_div = ""
+    if has_usd:
+        usd_block = _render_analysis_block(fund["usd"], f"chart-{idx}-usd-conv")
+        usd_div = f'<div id="fund-{idx}-usd-conv" style="display:none">{usd_block}</div>'
 
     krw_div = ""
     if has_krw:
@@ -1923,6 +1944,7 @@ def render_fund_section(fund: dict, idx: int) -> str:
   <p class="fund-meta">{fund['member_cd']} / {fund['fund_cd']} | {b['first_date']} ~ {b['last_date']}</p>
   {toggle_html}
   {orig_div}
+  {usd_div}
   {krw_div}
   {jpy_div}
 </section>"""
@@ -1990,6 +2012,13 @@ def render_html(fund_results: list[dict], risk_free: float) -> str:
                 "chart": f["krw"]["chart"],
                 "daily": f["krw"]["daily"],
                 "monthly": f["krw"]["monthly"],
+            }
+        if f.get("has_usd") and f.get("usd"):
+            entry["hasUsd"] = True
+            entry["usd"] = {
+                "chart": f["usd"]["chart"],
+                "daily": f["usd"]["daily"],
+                "monthly": f["usd"]["monthly"],
             }
         if f.get("has_jpy") and f.get("jpy"):
             entry["hasJpy"] = True
@@ -2070,6 +2099,7 @@ def main() -> None:
         ccy = fund_currency.get(f["fundCd"])
         krw_nav = None
         jpy_nav = None
+        usd_nav = None
 
         if ccy == "USD":
             foreign_nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
@@ -2088,9 +2118,12 @@ def main() -> None:
                 fx = fx_rates["JPYKRW"].reindex(foreign_nav.index, method="ffill")
                 krw_nav = (foreign_nav * fx).dropna()
         else:
-            # KRW assets (insurance funds, KS200) → JPY conversion
+            # KRW assets (insurance funds, KS200) → USD and JPY conversion
+            krw_asset_nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
+            if "USDKRW" in fx_rates:
+                fx = fx_rates["USDKRW"].reindex(krw_asset_nav.index, method="ffill")
+                usd_nav = (krw_asset_nav / fx).dropna()
             if "JPYKRW" in fx_rates:
-                krw_asset_nav = load_nav_series(conn, f["memberCd"], f["fundCd"])
                 fx = fx_rates["JPYKRW"].reindex(krw_asset_nav.index, method="ffill")
                 jpy_nav = (krw_asset_nav / fx).dropna()
 
@@ -2101,6 +2134,10 @@ def main() -> None:
         if result:
             result["currency_label"] = ccy or "KRW"
             result["region"] = f.get("region", "")
+            # Add USD analysis (for KRW assets)
+            if usd_nav is not None and len(usd_nav) >= 30:
+                result["has_usd"] = True
+                result["usd"] = _build_series_data(usd_nav, risk_free, args.top_drawdowns)
             # Add JPY analysis
             if jpy_nav is not None and len(jpy_nav) >= 30:
                 result["has_jpy"] = True
