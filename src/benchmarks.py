@@ -233,12 +233,18 @@ SPIKE_CLEANUP = [
 def _fix_splits(conn):
     """Apply known split adjustments and data fixes after fetch."""
     for fund_cd, split_date, divisor in SPLIT_FIXES:
+        # Check nav right before split date — if much larger than right after, split not adjusted
         cur = conn.execute(
-            "SELECT MAX(nav) FROM fund_nav WHERE fund_cd=? AND std_ymd<?",
+            "SELECT nav FROM fund_nav WHERE fund_cd=? AND std_ymd<? ORDER BY std_ymd DESC LIMIT 1",
             (fund_cd, split_date),
         )
-        max_nav = cur.fetchone()[0]
-        if max_nav and max_nav > 500 * divisor:
+        row_before = cur.fetchone()
+        cur = conn.execute(
+            "SELECT nav FROM fund_nav WHERE fund_cd=? AND std_ymd>=? ORDER BY std_ymd LIMIT 1",
+            (fund_cd, split_date),
+        )
+        row_after = cur.fetchone()
+        if row_before and row_after and row_before[0] / row_after[0] > divisor * 0.5:
             conn.execute(
                 "UPDATE fund_nav SET nav = nav / ? WHERE fund_cd=? AND std_ymd<?",
                 (divisor, fund_cd, split_date),
