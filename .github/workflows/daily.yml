@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: fund-scraper-daily
@@ -29,7 +31,13 @@ jobs:
       - name: Fetch latest NAVs
         run: python -m src.daily
 
-      - name: Commit & push
+      - name: Fetch benchmark data
+        run: python -m src.benchmarks
+
+      - name: Build dashboard
+        run: python -m src.dashboard --output _site/index.html
+
+      - name: Commit data changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -40,3 +48,19 @@ jobs:
             git commit -m "data: $(date -u +%Y-%m-%d) NAV update"
             git push
           fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: fetch
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
