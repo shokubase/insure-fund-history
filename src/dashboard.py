@@ -549,6 +549,9 @@ HTML_TEMPLATE = """\
                                  border-radius: 6px; text-align: right; font: inherit; font-size: .82rem;
                                  background: var(--surface); color: var(--text); }
   .fund-row input[type=number]:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  /* A pinned weight is one the user typed — auto rows split whatever is left over. */
+  .fund-row input[type=number].pinned { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .pf-weight-hint { font-size: .74rem; color: var(--subtle); }
   input[type=date] { padding: .28rem .45rem; border: 1px solid var(--border-strong); border-radius: 6px;
                      font: inherit; font-size: .8rem; background: var(--surface); color: var(--text); }
   .toolbar { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap;
@@ -673,6 +676,26 @@ HTML_TEMPLATE = """\
     <p><b>자산 비교</b> 탭에서 선택한 자산의 지표·차트·하락 이벤트를 개별로 확인합니다.</p>
   </header>
 
+  <div class="asset-filter" id="detail-period" style="display:none;">
+    <div class="card-head">
+      <h2>기간 선택</h2>
+      <span class="period-info" id="detail-period-info"></span>
+    </div>
+    <div class="period-row">
+      <span class="period-label">빠른 선택</span>
+      <div class="filter-chips" id="detail-period-presets"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">연도</span>
+      <div class="filter-chips" id="detail-period-years"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">직접 입력</span>
+      <label>시작일 <input type="date" id="detail-start"></label>
+      <label>종료일 <input type="date" id="detail-end"></label>
+    </div>
+  </div>
+
   %%FUND_SECTIONS%%
 
   <div class="empty" id="detail-empty">선택된 자산이 없습니다. <b>자산 비교</b> 탭에서 자산을 선택하세요.</div>
@@ -696,6 +719,12 @@ HTML_TEMPLATE = """\
       </div>
       <div class="toolbar">
         <div class="weight-sum" id="weight-sum">비중 합계: 0%</div>
+        <span class="sep">|</span>
+        <div class="filter-actions">
+          <button id="pf-equal" type="button">균등 배분</button>
+          <button id="pf-normalize" type="button">100%로 맞추기</button>
+        </div>
+        <span class="pf-weight-hint">체크하면 자동으로 균등 배분됩니다. 직접 입력한 값은 고정돼요.</span>
       </div>
       <div class="period-block" id="pf-period" style="display:none;">
         <div class="period-head">
@@ -829,6 +858,8 @@ function refreshTabState() {
   setBadge('badge-detail', picked);
   document.getElementById('compare-empty').style.display = picked >= 2 ? 'none' : '';
   document.getElementById('detail-empty').style.display = picked > 0 ? 'none' : '';
+  // Runs after the chip handlers have toggled section visibility and built any new charts.
+  refreshDetailPeriod();
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -1036,7 +1067,10 @@ function periodPresetDefs(lo, hi) {
   ].filter(p => p.key === 'all' || p.start > lo);
 }
 
-// ids: { card, info, presets, years, start, end }; onChange fires after every range edit.
+// ids: { card, info, presets, years, start, end, infoLabel? }; onChange fires after every
+// range edit. infoLabel names what the bounds mean — the detail tab spans a union, not a
+// common period.
+
 function makePeriodPicker(ids, onChange) {
   const el = k => document.getElementById(ids[k]);
   const startInput = el('start'), endInput = el('end');
@@ -1059,7 +1093,7 @@ function makePeriodPicker(ids, onChange) {
   function render(note) {
     const lo = bounds.start, hi = bounds.end;
     el('card').style.display = '';
-    el('info').textContent = `전체 공통 기간 ${lo} ~ ${hi}` + (note || '');
+    el('info').textContent = `${ids.infoLabel || '전체 공통 기간'} ${lo} ~ ${hi}` + (note || '');
 
     startInput.min = endInput.min = lo;
     startInput.max = endInput.max = hi;
@@ -1647,6 +1681,8 @@ function attachDragSelect(canvasId, overlayId, statsId, chartRef, fullDatesOrFn,
 }
 
 const fundCharts = {};
+const fundSeries = {};   // chart prefix -> { dates, nav } backing the drag-select readout
+const dragBound = new Set();
 
 function rebuildNav(dailyData) {
   const nav = [1000];
@@ -1655,61 +1691,229 @@ function rebuildNav(dailyData) {
   return { dates: [d0.toISOString().slice(0,10), ...dailyData.dates], nav };
 }
 
-function createSingleChart(idx) {
-  const fund = FUNDS[idx];
-
-  // Orig charts + drag-select
-  const origNav = renderChart(`chart-${idx}-orig-nav`, fund.chart.dates, fund.chart.nav,
-    '#3b82f6', { label: '기준가', bg: 'rgba(59,130,246,0.12)' });
-  renderChart(`chart-${idx}-orig-dd`, fund.chart.dates, fund.chart.drawdown,
-    '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
-  fundCharts[`${idx}-orig`] = origNav;
-  const origFull = rebuildNav(fund.daily);
-  attachDragSelect(`chart-${idx}-orig-nav`, `chart-${idx}-orig-overlay`, `chart-${idx}-orig-stats`,
-    () => fundCharts[`${idx}-orig`], origFull.dates, origFull.nav);
-
-  // USD-converted charts + drag-select (for KRW assets)
-  if (fund.usd) {
-    const usdConvNav = renderChart(`chart-${idx}-usd-conv-nav`, fund.usd.chart.dates, fund.usd.chart.nav,
-      '#3b82f6', { label: '기준가 (USD)', bg: 'rgba(59,130,246,0.12)' });
-    renderChart(`chart-${idx}-usd-conv-dd`, fund.usd.chart.dates, fund.usd.chart.drawdown,
-      '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
-    fundCharts[`${idx}-usd-conv`] = usdConvNav;
-    const usdConvFull = rebuildNav(fund.usd.daily);
-    attachDragSelect(`chart-${idx}-usd-conv-nav`, `chart-${idx}-usd-conv-overlay`, `chart-${idx}-usd-conv-stats`,
-      () => fundCharts[`${idx}-usd-conv`], usdConvFull.dates, usdConvFull.nav);
-  }
-
-  // KRW charts + drag-select
-  if (fund.krw) {
-    const krwNav = renderChart(`chart-${idx}-krw-nav`, fund.krw.chart.dates, fund.krw.chart.nav,
-      '#3b82f6', { label: '기준가 (KRW)', bg: 'rgba(59,130,246,0.12)' });
-    renderChart(`chart-${idx}-krw-dd`, fund.krw.chart.dates, fund.krw.chart.drawdown,
-      '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
-    fundCharts[`${idx}-krw`] = krwNav;
-    const krwFull = rebuildNav(fund.krw.daily);
-    attachDragSelect(`chart-${idx}-krw-nav`, `chart-${idx}-krw-overlay`, `chart-${idx}-krw-stats`,
-      () => fundCharts[`${idx}-krw`], krwFull.dates, krwFull.nav);
-  }
-
-  // JPY charts + drag-select (if available)
-  if (fund.jpy) {
-    const jpyNav = renderChart(`chart-${idx}-jpy-nav`, fund.jpy.chart.dates, fund.jpy.chart.nav,
-      '#3b82f6', { label: '기준가 (JPY)', bg: 'rgba(59,130,246,0.12)' });
-    renderChart(`chart-${idx}-jpy-dd`, fund.jpy.chart.dates, fund.jpy.chart.drawdown,
-      '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
-    fundCharts[`${idx}-jpy`] = jpyNav;
-    const jpyFull = rebuildNav(fund.jpy.daily);
-    attachDragSelect(`chart-${idx}-jpy-nav`, `chart-${idx}-jpy-overlay`, `chart-${idx}-jpy-stats`,
-      () => fundCharts[`${idx}-jpy`], jpyFull.dates, jpyFull.nav);
-  }
-
-  // Init trailing returns
-  initFundTrailing(`chart-${idx}-orig`, fund.daily);
-  if (fund.usd) initFundTrailing(`chart-${idx}-usd-conv`, fund.usd.daily);
-  if (fund.krw) initFundTrailing(`chart-${idx}-krw`, fund.krw.daily);
-  if (fund.jpy) initFundTrailing(`chart-${idx}-jpy`, fund.jpy.daily);
+// The blocks a fund renders in the detail tab — one per available currency view.
+function fundVariants(idx) {
+  const f = FUNDS[idx];
+  const out = [{ key: 'orig', data: f, label: '기준가' }];
+  if (f.usd) out.push({ key: 'usd-conv', data: f.usd, label: '기준가 (USD)' });
+  if (f.krw) out.push({ key: 'krw', data: f.krw, label: '기준가 (KRW)' });
+  if (f.jpy) out.push({ key: 'jpy', data: f.jpy, label: '기준가 (JPY)' });
+  return out;
 }
+
+// Full-resolution NAV at real 기준가 levels: chart.nav[0] is the true starting value and
+// the daily returns carry it forward, so any slice keeps its actual level (unlike
+// rebuildNav, which restarts every series at 1000).
+function rebuildActual(data) {
+  const nav = [data.chart.nav[0]];
+  for (const r of data.daily.returns) nav.push(nav[nav.length - 1] * (1 + r));
+  const d0 = new Date(data.daily.dates[0]); d0.setDate(d0.getDate() - 1);
+  return { dates: [d0.toISOString().slice(0, 10), ...data.daily.dates], nav };
+}
+
+function destroyChart(id) { const c = Chart.getChart(id); if (c) c.destroy(); }
+
+// Draw one variant's NAV + drawdown pair. Chart.js refuses a canvas that already holds a
+// chart, so both are torn down first.
+function drawVariantCharts(idx, v, dates, nav, ddPct) {
+  const prefix = `chart-${idx}-${v.key}`;
+  destroyChart(`${prefix}-nav`);
+  destroyChart(`${prefix}-dd`);
+  fundCharts[`${idx}-${v.key}`] = renderChart(`${prefix}-nav`, dates, nav,
+    '#3b82f6', { label: v.label, bg: 'rgba(59,130,246,0.12)' });
+  renderChart(`${prefix}-dd`, dates, ddPct,
+    '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
+}
+
+// Back to the Python-rendered view: its own downsampled chart payload and full history.
+function paintVariantFull(idx, v) {
+  const prefix = `chart-${idx}-${v.key}`;
+  drawVariantCharts(idx, v, v.data.chart.dates, v.data.chart.nav, v.data.chart.drawdown);
+  fundSeries[prefix] = rebuildActual(v.data);
+  initFundTrailing(prefix, v.data.daily);
+}
+
+function createSingleChart(idx) {
+  fundVariants(idx).forEach(v => {
+    const prefix = `chart-${idx}-${v.key}`;
+    paintVariantFull(idx, v);
+    // Bind once — the readout reads fundSeries, so it follows later repaints on its own.
+    if (!dragBound.has(prefix)) {
+      attachDragSelect(`${prefix}-nav`, `${prefix}-overlay`, `${prefix}-stats`,
+        () => fundCharts[`${idx}-${v.key}`],
+        () => fundSeries[prefix].dates, () => fundSeries[prefix].nav);
+      dragBound.add(prefix);
+    }
+  });
+}
+
+// ── 개별 자산 상세: period ──
+// The blocks here are server-rendered from Python, so 전체 puts that markup back rather
+// than recomputing it — the default view stays the one Python vouched for.
+const detailSnapshots = {};
+const DETAIL_PARTS = ['metrics', 'ddtable', 'lstable'];
+
+function snapshotVariant(prefix) {
+  DETAIL_PARTS.forEach(part => {
+    const id = `${prefix}-${part}`;
+    if (id in detailSnapshots) return;
+    const el = document.getElementById(id);
+    detailSnapshots[id] = el ? el.innerHTML : '';
+  });
+}
+
+function restoreVariant(idx, v) {
+  const prefix = `chart-${idx}-${v.key}`;
+  DETAIL_PARTS.forEach(part => {
+    const id = `${prefix}-${part}`;
+    const el = document.getElementById(id);
+    if (el && id in detailSnapshots) el.innerHTML = detailSnapshots[id];
+  });
+  paintVariantFull(idx, v);
+}
+
+function visibleFundIdxs() {
+  return [...document.querySelectorAll('#panel-detail .fund-section')]
+    .filter(s => /^fund-\d+$/.test(s.id) && !s.classList.contains('hidden'))
+    .map(s => +s.id.slice(5));
+}
+
+function paintVariantRanged(idx, v) {
+  const prefix = `chart-${idx}-${v.key}`;
+  snapshotVariant(prefix);
+  const metricsEl = document.getElementById(`${prefix}-metrics`);
+  const ddEl = document.getElementById(`${prefix}-ddtable`);
+  const lsEl = document.getElementById(`${prefix}-lstable`);
+  const trailEl = document.querySelector(`.trailing-section[data-prefix="${prefix}"]`);
+
+  const full = rebuildActual(v.data);
+  const r = detailPeriod.range();
+  const keep = [];
+  for (let i = 0; i < full.dates.length; i++) {
+    const d = full.dates[i];
+    if ((!r.start || d >= r.start) && (!r.end || d <= r.end)) keep.push(i);
+  }
+  const dates = keep.map(i => full.dates[i]);
+  const nav = keep.map(i => full.nav[i]);
+  const m = dates.length >= 2 ? calcMetrics(dates, nav) : null;
+
+  if (trailEl) trailEl.innerHTML = '';
+  if (!m) {
+    destroyChart(`${prefix}-nav`);
+    destroyChart(`${prefix}-dd`);
+    fundSeries[prefix] = { dates: dates.length ? dates : full.dates, nav: nav.length ? nav : full.nav };
+    if (metricsEl) metricsEl.innerHTML =
+      `<p class="fund-meta" style="margin:0;">선택 기간에 이 자산의 데이터가 없습니다 (${dates.length}거래일).</p>`;
+    if (ddEl) ddEl.innerHTML = '';
+    if (lsEl) lsEl.innerHTML = '';
+    return;
+  }
+  fundSeries[prefix] = { dates, nav };
+
+  // Python averages the drawdown summary over every event but tables only the worst 5.
+  const allEvents = findDrawdowns(dates, nav, Infinity);
+  const top = allEvents.slice(0, 5);
+  const avgDd = allEvents.length
+    ? (allEvents.reduce((s, e) => s + Math.abs(+e.depth), 0) / allEvents.length).toFixed(2) : '0.00';
+  const longest = allEvents.length ? allEvents.reduce((a, b) => b.days > a.days ? b : a, allEvents[0]) : null;
+
+  // Same bar as the comparison table: annualising a sub-year window invents a headline.
+  const totalDays = (new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000;
+  const annualisable = totalDays >= 350;
+  const pctCls = v2 => +v2 > 0 ? 'positive' : +v2 < 0 ? 'negative' : '';
+  const fmtPct = (v2, sign) => (sign && +v2 > 0 ? '+' : '') + v2 + '%';
+  const dash = '<div class="value" title="기간이 1년 미만이라 연환산하지 않습니다">—</div>';
+
+  if (metricsEl) metricsEl.innerHTML = `
+    <div class="metric-card"><div class="label">기간</div><div class="value">${m.totalYears}년</div></div>
+    <div class="metric-card"><div class="label">총 수익률</div><div class="value ${pctCls(m.totalReturn)}">${fmtPct(m.totalReturn, true)}</div></div>
+    <div class="metric-card"><div class="label">CAGR</div>${annualisable ? `<div class="value ${pctCls(m.cagr)}">${fmtPct(m.cagr, true)}</div>` : dash}</div>
+    <div class="metric-card"><div class="label">변동성</div><div class="value">${m.volatility}%</div></div>
+    <div class="metric-card"><div class="label">샤프비율</div>${annualisable ? `<div class="value">${m.sharpe}</div>` : dash}</div>
+    <div class="metric-card"><div class="label">MDD</div><div class="value negative">${m.mdd}%</div></div>
+    <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-${avgDd}%</div></div>
+    <div class="metric-card"><div class="label">최장 하락 기간</div><div class="value">${longest ? longest.days.toLocaleString() : 0}일</div></div>`;
+
+  const step = Math.max(1, Math.floor(dates.length / 500));
+  drawVariantCharts(idx, v,
+    dates.filter((_, i) => i % step === 0),
+    nav.filter((_, i) => i % step === 0).map(x => +x.toFixed(2)),
+    m.drawdownSeries.filter((_, i) => i % step === 0).map(x => +(x * 100).toFixed(2)));
+
+  if (ddEl) {
+    ddEl.innerHTML = top.length === 0 ? '' : `
+      <h3>주요 하락 이벤트 (Top ${top.length})</h3>
+      <table><tr><th>#</th><th>시작</th><th>저점</th><th>회복</th><th>하락폭</th><th>기간</th></tr>` +
+      top.map((e, i) =>
+        `<tr><td>${i + 1}</td><td>${e.start}</td><td>${e.trough}</td>` +
+        `<td>${e.end || '<span class="ongoing">진행중</span>'}</td>` +
+        `<td class="negative">${e.depth}%</td><td>${e.days.toLocaleString()}일</td></tr>`).join('') +
+      '</table>';
+  }
+
+  const lsDca = [3, 12, 36].map(w => calcLsDca(nav, dates, w)).filter(Boolean);
+  if (lsEl) {
+    lsEl.innerHTML = lsDca.length === 0
+      ? '<p style="color:var(--subtle);">데이터 부족으로 LS vs DCA 분석 불가</p>'
+      : `<h3>LS vs DCA 분석</h3>
+         <table><tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>` +
+        lsDca.map(x =>
+          `<tr><td>${x.window}개월</td><td>${x.observations.toLocaleString()}</td>` +
+          `<td class="${+x.winRate > 50 ? 'positive' : 'negative'}">${x.winRate}%</td>` +
+          `<td class="${+x.mlsa > 0 ? 'positive' : 'negative'}">${+x.mlsa > 0 ? '+' : ''}${x.mlsa}%</td>` +
+          `<td class="negative">${x.mlsd}%</td></tr>`).join('') + '</table>';
+  }
+
+  // Rolling windows need well over a year of history; the picker can easily cut below
+  // that, and initFundTrailing just bails — so leave a reason behind for it to overwrite.
+  const clipped = { dates: [], returns: [] };
+  keep.forEach(i => { if (i >= 1) { clipped.dates.push(full.dates[i]); clipped.returns.push(v.data.daily.returns[i - 1]); } });
+  if (trailEl) trailEl.innerHTML =
+    '<h3>Rolling Trailing Returns</h3><p class="fund-meta" style="margin:0;">' +
+    '선택 기간이 짧아 롤링 구간을 만들 수 없습니다 (1년 이상 필요).</p>';
+  initFundTrailing(prefix, clipped);
+}
+
+function applyDetailRange() {
+  const narrowed = detailPeriod.narrowed();
+  visibleFundIdxs().forEach(idx => {
+    const section = document.getElementById('fund-' + idx);
+    if (!section || !section._chartsCreated) return;
+    const meta = document.getElementById(`fund-${idx}-meta`);
+    if (narrowed) {
+      fundVariants(idx).forEach(v => paintVariantRanged(idx, v));
+      // The header still advertises the full history — say which slice is on screen.
+      const r = detailPeriod.range();
+      if (meta) meta.textContent = `${meta.dataset.full} → 선택 기간 ${r.start || '처음'} ~ ${r.end || '끝'}`;
+      section._ranged = true;
+    } else if (section._ranged) {
+      fundVariants(idx).forEach(v => restoreVariant(idx, v));
+      if (meta) meta.textContent = meta.dataset.full;
+      section._ranged = false;
+    }
+  });
+}
+
+function refreshDetailPeriod() {
+  const idxs = visibleFundIdxs();
+  if (idxs.length === 0) { detailPeriod.hide(); return; }
+  // No common-period requirement here: each asset is shown on its own, so the picker
+  // spans the union and every block clips to whatever it actually has.
+  let lo = null, hi = null;
+  idxs.forEach(i => {
+    const d = FUNDS[i].daily.dates;
+    if (lo === null || d[0] < lo) lo = d[0];
+    if (hi === null || d[d.length - 1] > hi) hi = d[d.length - 1];
+  });
+  detailPeriod.setBounds(lo, hi);
+  applyDetailRange();
+}
+
+const detailPeriod = makePeriodPicker({
+  card: 'detail-period', info: 'detail-period-info', presets: 'detail-period-presets',
+  years: 'detail-period-years', start: 'detail-start', end: 'detail-end',
+  infoLabel: '전체 기간',
+}, () => refreshDetailPeriod());
 
 function toggleFundView(btn) {
   const group = btn.parentElement.dataset.group;
@@ -1755,11 +1959,16 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) pfFundCurrency[i] = f.curren
     const num = row.querySelector('input[type=number]');
 
     cb.addEventListener('change', () => {
-      if (!cb.checked) { num.value = ''; }
-      else if (!num.value || +num.value === 0) { num.value = 20; }
-      updateWeightSum();
+      // Checking or unchecking always hands the row back to the auto split.
+      pfPinned.delete(idx);
+      if (!cb.checked) num.value = '';
+      rebalanceWeights();
     });
-    num.addEventListener('input', () => { cb.checked = +num.value > 0; updateWeightSum(); });
+    num.addEventListener('input', () => {
+      cb.checked = +num.value > 0;
+      if (cb.checked) pfPinned.add(idx); else { pfPinned.delete(idx); num.value = ''; }
+      rebalanceWeights();
+    });
   });
 })();
 
@@ -1767,6 +1976,59 @@ function getPfFundData(fund, idx, key) {
   const mode = pfFundCurrency[idx] || (fund.currency === 'USD' ? 'krw' : 'orig');
   return getDataByMode(fund, mode, key);
 }
+
+// ── Weights ──
+// Typing a weight pins that row; every unpinned row just splits whatever is left, so the
+// common cases (equal weight, "60% here and share the rest") need no arithmetic.
+const pfPinned = new Set();
+
+function pfRows() {
+  return [...document.querySelectorAll('#fund-selector .fund-row')].map(row => ({
+    row,
+    cb: row.querySelector('input[type=checkbox]'),
+    num: row.querySelector('input[type=number]'),
+    idx: +row.querySelector('input[type=checkbox]').dataset.idx,
+  }));
+}
+
+function rebalanceWeights() {
+  const checked = pfRows().filter(r => r.cb.checked);
+  const auto = checked.filter(r => !pfPinned.has(r.idx));
+  if (auto.length > 0) {
+    const pinnedSum = checked.filter(r => pfPinned.has(r.idx))
+      .reduce((s, r) => s + (+r.num.value || 0), 0);
+    const left = Math.max(0, 100 - pinnedSum);
+    // Floor to 0.1 and give the remainder to the first row so the total lands exactly on 100.
+    const each = Math.floor(left / auto.length * 10) / 10;
+    auto.forEach(r => { r.num.value = each; });
+    const drift = +(left - each * auto.length).toFixed(1);
+    if (drift !== 0) auto[0].num.value = +(each + drift).toFixed(1);
+  }
+  pfRows().forEach(r => r.num.classList.toggle('pinned', r.cb.checked && pfPinned.has(r.idx)));
+  updateWeightSum();
+}
+
+document.getElementById('pf-equal').addEventListener('click', () => {
+  pfPinned.clear();
+  rebalanceWeights();
+});
+
+// Keeps the ratios the user set and scales them onto 100 — the escape hatch for when
+// every row is pinned and the total drifted.
+document.getElementById('pf-normalize').addEventListener('click', () => {
+  const checked = pfRows().filter(r => r.cb.checked);
+  const sum = checked.reduce((s, r) => s + (+r.num.value || 0), 0);
+  if (checked.length === 0 || sum <= 0) return;
+  let acc = 0;
+  checked.forEach((r, i) => {
+    const v = i === checked.length - 1 ? +(100 - acc).toFixed(1)
+                                       : +((+r.num.value || 0) / sum * 100).toFixed(1);
+    acc = +(acc + v).toFixed(1);
+    r.num.value = v;
+    pfPinned.add(r.idx);
+  });
+  rebalanceWeights();
+});
 
 function getSelections() {
   const rows = document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row, #fund-selector-index .fund-row');
@@ -2398,6 +2660,8 @@ function getCurrentConfig() {
 }
 
 function applyPreset(preset) {
+  // A preset carries deliberate weights, so every row it names counts as pinned.
+  pfPinned.clear();
   // Clear all
   document.querySelectorAll('#fund-selector-insurance .fund-row, #fund-selector-us .fund-row, #fund-selector-jp .fund-row, #fund-selector-index .fund-row').forEach(row => {
     const cb = row.querySelector('input[type=checkbox]');
@@ -2415,13 +2679,14 @@ function applyPreset(preset) {
         cb.checked = true;
         row.querySelector('input[type=number]').value = Math.round(item.weight * 100);
         // Set currency
+        pfPinned.add(item.idx);
         pfFundCurrency[item.idx] = item.ccy;
         const ccyBtns = row.querySelectorAll('.currency-toggle .btn-currency');
         ccyBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === item.ccy));
       }
     });
   });
-  updateWeightSum();
+  rebalanceWeights();
 }
 
 function renderPresetChips() {
@@ -2526,7 +2791,7 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
     ds = data["dd_summary"]
 
     metrics = f"""\
-    <div class="metrics-grid">
+    <div class="metrics-grid" id="{canvas_id_prefix}-metrics">
       <div class="metric-card"><div class="label">기간</div><div class="value">{b['total_years']}년</div></div>
       <div class="metric-card"><div class="label">총 수익률</div><div class="value {_pct_class(b['total_return'])}">{_fmt_pct(b['total_return'])}</div></div>
       <div class="metric-card"><div class="label">CAGR</div><div class="value {_pct_class(b['cagr'])}">{_fmt_pct(b['cagr'])}</div></div>
@@ -2556,12 +2821,13 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
             rows += f"<tr><td>{i}</td><td>{e['start']}</td><td>{e['trough']}</td>"
             rows += f"<td>{end_str}</td><td class='negative'>{e['depth']:.2f}%</td>"
             rows += f"<td>{e['duration_days']:,}일</td></tr>\n"
-        dd_table = f"""\
+        dd_inner = f"""\
     <h3>주요 하락 이벤트 (Top {len(events)})</h3>
     <table><tr><th>#</th><th>시작</th><th>저점</th><th>회복</th><th>하락폭</th><th>기간</th></tr>
       {rows}</table>"""
     else:
-        dd_table = ""
+        dd_inner = ""
+    dd_table = f'<div id="{canvas_id_prefix}-ddtable">{dd_inner}</div>'
 
     ls_dca = data["ls_dca"]
     if ls_dca:
@@ -2573,12 +2839,13 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
             ls_rows += f"<td class='{win_cls}'>{r['win_rate']:.1f}%</td>"
             ls_rows += f"<td class='{mlsa_cls}'>{_fmt_pct(r['mlsa'])}</td>"
             ls_rows += f"<td class='negative'>{_fmt_pct(r['mlsd'], False)}</td></tr>\n"
-        ls_table = f"""\
+        ls_inner = f"""\
     <h3>LS vs DCA 분석</h3>
     <table><tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>
       {ls_rows}</table>"""
     else:
-        ls_table = '<p style="color:var(--subtle);">데이터 부족으로 LS vs DCA 분석 불가</p>'
+        ls_inner = '<p style="color:var(--subtle);">데이터 부족으로 LS vs DCA 분석 불가</p>'
+    ls_table = f'<div id="{canvas_id_prefix}-lstable">{ls_inner}</div>'
 
     trailing = f'<div class="trailing-section" data-prefix="{canvas_id_prefix}"></div>'
 
@@ -2627,7 +2894,7 @@ def render_fund_section(fund: dict, idx: int) -> str:
     return f"""\
 <section class="fund-section hidden" id="fund-{idx}">
   <h2>{fund['name']}</h2>
-  <p class="fund-meta">{fund['member_cd']} / {fund['fund_cd']} | {b['first_date']} ~ {b['last_date']}</p>
+  <p class="fund-meta" id="fund-{idx}-meta" data-full="{fund['member_cd']} / {fund['fund_cd']} | {b['first_date']} ~ {b['last_date']}">{fund['member_cd']} / {fund['fund_cd']} | {b['first_date']} ~ {b['last_date']}</p>
   {toggle_html}
   {orig_div}
   {usd_div}
