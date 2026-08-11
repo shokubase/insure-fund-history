@@ -293,179 +293,388 @@ HTML_TEMPLATE = """\
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <style>
-  :root { --bg: #f8f9fa; --card: #fff; --border: #dee2e6; --accent: #2563eb; --red: #dc2626; --green: #16a34a; }
+  :root {
+    --bg: #f4f5f8;
+    --card: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f7f8fa;
+    --surface-3: #edeff4;
+    --border: #e3e6ec;
+    --border-strong: #cdd2dc;
+    --text: #12161f;
+    --muted: #6b7280;
+    --subtle: #99a1b0;
+    --accent: #2f5fe0;
+    --accent-hover: #2449b8;
+    --accent-soft: #ecf1ff;
+    --red: #d92d20;
+    --green: #0a9257;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+    --shadow-sm: 0 1px 3px rgba(16,24,40,.07), 0 1px 2px rgba(16,24,40,.04);
+    --shadow-md: 0 6px 20px rgba(16,24,40,.09);
+    --sidebar-w: 250px;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-         background: var(--bg); color: #1a1a1a; line-height: 1.6; padding: 2rem; max-width: 1200px; margin: 0 auto; }
-  h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
-  .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 2rem; }
-  .fund-section { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-                  padding: 2rem; margin-bottom: 2rem; }
-  .fund-section h2 { font-size: 1.4rem; margin-bottom: 0.2rem; color: var(--accent); }
-  .fund-meta { font-size: 0.85rem; color: #888; margin-bottom: 1.5rem; }
-  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-                  gap: 1rem; margin-bottom: 1.5rem; }
-  .metric-card { background: var(--bg); border-radius: 8px; padding: 0.8rem 1rem; text-align: center; }
-  .metric-card .label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.05em; }
-  .metric-card .value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.55;
+         -webkit-font-smoothing: antialiased; font-size: 15px; }
+
+  /* ── App shell ─────────────────────────────────────────── */
+  .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w); z-index: 50;
+             background: var(--surface); border-right: 1px solid var(--border);
+             display: flex; flex-direction: column; padding: 1.1rem .85rem 1rem; gap: 1.1rem; }
+  .brand { display: flex; align-items: center; gap: .6rem; padding: .1rem .45rem .95rem;
+           border-bottom: 1px solid var(--border); }
+  .brand-mark { width: 32px; height: 32px; flex: none; border-radius: 9px; display: grid; place-items: center;
+                background: linear-gradient(135deg, var(--accent), #7b52d3); color: #fff;
+                font-size: .8rem; font-weight: 700; letter-spacing: -.02em; }
+  .brand-text strong { display: block; font-size: .93rem; font-weight: 650; letter-spacing: -.015em; }
+  .brand-text span { display: block; font-size: .7rem; color: var(--subtle); letter-spacing: .02em; }
+
+  .side-nav { display: flex; flex-direction: column; gap: .15rem; }
+  .nav-item { display: flex; align-items: center; gap: .6rem; width: 100%; padding: .58rem .65rem;
+              border: none; background: none; border-radius: var(--radius-sm); font: inherit; font-size: .875rem;
+              color: var(--muted); cursor: pointer; text-align: left; transition: background .12s, color .12s; }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .nav-item svg { width: 17px; height: 17px; flex: none; }
+  .nav-badge { margin-left: auto; min-width: 21px; height: 19px; padding: 0 .38rem; border-radius: 10px;
+               background: var(--surface-3); color: var(--muted); font-size: .69rem; font-weight: 600;
+               display: none; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+  .nav-badge.show { display: inline-flex; }
+  .nav-item.active .nav-badge { background: var(--accent); color: #fff; }
+  .side-foot { margin-top: auto; padding: .85rem .6rem 0; border-top: 1px solid var(--border);
+               font-size: .72rem; color: var(--subtle); line-height: 1.85; }
+  .side-foot b { color: var(--muted); font-weight: 600; }
+
+  .main { margin-left: var(--sidebar-w); padding: 1.8rem 2rem 4rem; }
+  .main-inner { max-width: 1280px; margin: 0 auto; }
+  .page-head { margin-bottom: 1.35rem; }
+  .page-head h1 { font-size: 1.4rem; font-weight: 650; letter-spacing: -.02em; }
+  .page-head p { font-size: .855rem; color: var(--muted); margin-top: .22rem; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; animation: panelIn .18s ease both; }
+  @keyframes panelIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  .empty { padding: 3rem 1.25rem; text-align: center; font-size: .875rem; color: var(--subtle);
+           background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+
+  @media (max-width: 900px) {
+    .sidebar { position: sticky; top: 0; bottom: auto; width: auto; flex-direction: row; align-items: center;
+               gap: .7rem; padding: .55rem .8rem; border-right: none; border-bottom: 1px solid var(--border);
+               overflow-x: auto; }
+    .brand { flex: none; border-bottom: none; border-right: 1px solid var(--border);
+             padding: 0 .7rem 0 .2rem; white-space: nowrap; }
+    .brand-text span { display: none; }
+    .side-nav { flex: none; flex-direction: row; gap: .25rem; }
+    .nav-item { white-space: nowrap; padding: .42rem .7rem; }
+    .side-foot { display: none; }
+    .main { margin-left: 0; padding: 1.2rem 1rem 3rem; }
+  }
+
+  /* ── Cards ─────────────────────────────────────────────── */
+  .card, .fund-section, .asset-filter {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.4rem 1.5rem; margin-bottom: 1.15rem; box-shadow: var(--shadow-xs); }
+  .card > h2, .fund-section > h2, .asset-filter > h2 {
+    font-size: 1.02rem; font-weight: 650; letter-spacing: -.012em; margin-bottom: .1rem; color: var(--text); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+               flex-wrap: wrap; margin-bottom: 1rem; }
+  .card-head h2 { margin-bottom: 0; }
+  .fund-meta { font-size: .8rem; color: var(--subtle); margin-bottom: 1.25rem; }
+  .hint { font-size: .74rem; color: var(--subtle); margin: -.6rem 0 1rem; }
+  h3 { font-size: .95rem; font-weight: 650; letter-spacing: -.01em; margin: 1.6rem 0 .75rem;
+       padding-bottom: .4rem; border-bottom: 1px solid var(--border); }
+
+  .metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+                  gap: .6rem; margin-bottom: 1.4rem; }
+  @media (max-width: 900px) { .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .metric-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+                 padding: .7rem .85rem; text-align: center; }
+  .metric-card .label { font-size: .7rem; color: var(--subtle); letter-spacing: .01em; }
+  .metric-card .value { font-size: 1.2rem; font-weight: 680; letter-spacing: -.02em; margin-top: .15rem;
+                        font-variant-numeric: tabular-nums; }
   .positive { color: var(--green); }
   .negative { color: var(--red); }
-  .chart-container { position: relative; height: 300px; margin-bottom: 1.5rem; }
-  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+
+  .chart-container { position: relative; height: 300px; margin-bottom: 1.4rem; }
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.4rem; }
   @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
-  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid var(--border); padding-bottom: 0.3rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-bottom: 1rem; }
-  th, td { padding: 0.5rem 0.8rem; text-align: right; border-bottom: 1px solid var(--border); }
-  th { background: var(--bg); font-weight: 600; text-align: right; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .83rem; margin-bottom: 1rem;
+          font-variant-numeric: tabular-nums; }
+  th, td { padding: .5rem .7rem; text-align: right; border-bottom: 1px solid var(--border); }
+  th { background: var(--surface-2); font-weight: 600; font-size: .75rem; color: var(--muted);
+       text-align: right; white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
-  tr:hover { background: #f0f4ff; }
+  tr:hover td { background: var(--accent-soft); }
   .ongoing { color: var(--red); font-style: italic; }
 
-  /* Asset filter */
-  .asset-filter { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-                  padding: 1.5rem 2rem; margin-bottom: 2rem; }
-  .asset-filter h2 { font-size: 1.2rem; margin-bottom: 0.8rem; color: var(--accent); }
-  .filter-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-  .filter-chip { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.8rem;
-                 border: 1.5px solid var(--border); border-radius: 20px; font-size: 0.85rem;
-                 cursor: pointer; transition: all 0.15s; user-select: none; background: var(--bg); }
-  .filter-chip:hover { border-color: var(--accent); }
-  .filter-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* ── Asset filter / selector ───────────────────────────── */
+  .filter-chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .filter-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .32rem .7rem;
+                 border: 1px solid var(--border-strong); border-radius: 999px; font-size: .8rem;
+                 cursor: pointer; transition: background .12s, border-color .12s, color .12s;
+                 user-select: none; background: var(--surface); color: var(--muted); }
+  .filter-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .filter-chip.active { background: var(--accent); color: #fff; border-color: var(--accent);
+                        box-shadow: var(--shadow-xs); }
   .filter-chip input { display: none; }
-  .filter-actions { margin-top: 0.8rem; display: flex; gap: 0.5rem; }
-  .filter-actions button { background: none; border: 1px solid var(--border); border-radius: 6px;
-                           padding: 0.3rem 0.8rem; font-size: 0.8rem; cursor: pointer; color: #666; }
-  .filter-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  /* Keep the per-asset currency toggle quiet until the asset itself is picked. */
+  .filter-chip:not(.active) .currency-toggle { opacity: .5; }
+  .filter-chip:not(.active):hover .currency-toggle { opacity: 1; }
+  .filter-chip.active .btn-currency { background: rgba(255,255,255,.18); color: #fff;
+                                      border-color: rgba(255,255,255,.4); }
+  .filter-chip.active .btn-currency.active { background: #fff; color: var(--accent); }
+  .filter-actions { display: flex; gap: .4rem; }
+  .filter-actions button { background: var(--surface); border: 1px solid var(--border-strong);
+                           border-radius: var(--radius-sm); padding: .32rem .75rem; font: inherit;
+                           font-size: .78rem; cursor: pointer; color: var(--muted); transition: all .12s; }
+  .filter-actions button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .fund-section.hidden { display: none; }
 
-  /* Two-column selector layout */
-  .selector-columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; margin-bottom: 0.8rem; }
-  .selector-column h4 { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em;
-                         margin-bottom: 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+  .selector-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; }
+  .selector-column h4 { font-size: .72rem; color: var(--subtle); font-weight: 600; letter-spacing: .06em;
+                        text-transform: uppercase; margin-bottom: .5rem; padding-bottom: .32rem;
+                        border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: .35rem; }
   .selector-column .filter-chips { margin-bottom: 0; }
-  .col-ccy-toggle { display: inline-flex; vertical-align: middle; margin-left: 0.3rem; }
-  .col-ccy-toggle .btn-currency { padding: 0.05rem 0.35rem; font-size: 0.65rem; }
-  @media (max-width: 640px) { .selector-columns { grid-template-columns: 1fr; } }
+  .col-ccy-toggle { display: inline-flex; vertical-align: middle; margin-left: auto; }
+  .col-ccy-toggle .btn-currency { padding: .05rem .35rem; font-size: .65rem; }
+  @media (max-width: 760px) { .selector-columns { grid-template-columns: 1fr; } }
 
-  /* Currency toggle */
-  .currency-toggle { display: flex; gap: 0; }
-  .btn-currency { background: var(--bg); border: 1px solid var(--border); padding: 0.4rem 1rem;
-                   font-size: 0.85rem; cursor: pointer; color: #666; transition: all 0.15s; }
+  /* ── Currency toggle ───────────────────────────────────── */
+  .currency-toggle { display: inline-flex; gap: 0; }
+  .btn-currency { background: var(--surface-2); border: 1px solid var(--border-strong); padding: .3rem .8rem;
+                  font: inherit; font-size: .78rem; cursor: pointer; color: var(--muted); transition: all .12s; }
   .btn-currency:first-child { border-radius: 6px 0 0 6px; }
   .btn-currency:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .btn-currency:hover { color: var(--accent); }
   .btn-currency.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-  /* Correlation matrix */
+  /* ── Correlation matrix ────────────────────────────────── */
   .corr-table { width: auto; margin: 0 auto 1rem; }
-  .corr-table th, .corr-table td { text-align: center; min-width: 80px; padding: 0.6rem; font-size: 0.85rem; }
-  .corr-table th { background: var(--bg); font-size: 0.75rem; max-width: 120px;
-                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .corr-table th, .corr-table td { text-align: center; min-width: 78px; padding: .5rem; font-size: .8rem; }
+  .corr-table th { background: var(--surface-2); font-size: .73rem; max-width: 120px;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .corr-table tr:hover td { background: inherit; }
 
-  /* Portfolio analyzer */
-  .portfolio-controls { margin-bottom: 1.5rem; }
-  .fund-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.5rem 0;
+  /* ── Portfolio analyzer ────────────────────────────────── */
+  .portfolio-controls { margin-bottom: 1.4rem; }
+  .fund-row { display: flex; align-items: center; gap: .6rem; padding: .38rem 0;
               border-bottom: 1px solid var(--border); }
-  .fund-row label { flex: 1; min-width: 0; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+  .fund-row:last-child { border-bottom: none; }
+  .fund-row label { flex: 1; min-width: 0; cursor: pointer; display: flex; align-items: center;
+                    gap: .45rem; font-size: .82rem; color: var(--muted); }
   .fund-row label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .fund-row input[type=number] { width: 70px; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
-                                  border-radius: 4px; text-align: right; font-size: 0.9rem; }
-  .fund-row input[type=range] { width: 120px; }
-  .weight-sum { margin: 0.8rem 0; font-size: 0.9rem; }
-  .weight-sum.warn { color: var(--red); font-weight: 600; }
-  .btn-analyze { background: var(--accent); color: #fff; border: none; border-radius: 8px;
-                 padding: 0.6rem 1.5rem; font-size: 1rem; cursor: pointer; }
-  .btn-analyze:hover { opacity: 0.9; }
-  .btn-analyze:disabled { background: #aaa; cursor: not-allowed; }
-  #portfolio-results { margin-top: 1.5rem; }
-  .preset-chip { position: relative; padding-right: 1.6rem !important; }
-  .preset-chip .preset-del { position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%);
-    font-size: 0.7rem; color: #999; cursor: pointer; line-height: 1; }
+  .fund-row input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .fund-row input[type=number] { width: 62px; padding: .25rem .45rem; border: 1px solid var(--border-strong);
+                                 border-radius: 6px; text-align: right; font: inherit; font-size: .82rem;
+                                 background: var(--surface); color: var(--text); }
+  .fund-row input[type=number]:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  input[type=date] { padding: .28rem .45rem; border: 1px solid var(--border-strong); border-radius: 6px;
+                     font: inherit; font-size: .8rem; background: var(--surface); color: var(--text); }
+  .toolbar { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap;
+             margin: 1rem 0; padding: .7rem .9rem; background: var(--surface-2);
+             border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .toolbar .sep { color: var(--border-strong); }
+  .weight-sum { font-size: .84rem; font-weight: 600; color: var(--muted); }
+  .weight-sum.warn { color: var(--red); }
+  .btn-analyze { background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm);
+                 padding: .55rem 1.35rem; font: inherit; font-size: .88rem; font-weight: 600; cursor: pointer;
+                 transition: background .12s; box-shadow: var(--shadow-xs); }
+  .btn-analyze:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-analyze:disabled { background: var(--surface-3); color: var(--subtle); cursor: not-allowed; box-shadow: none; }
+  .btn-ghost { background: var(--surface); color: var(--muted); border: 1px solid var(--border-strong);
+               box-shadow: none; font-weight: 500; }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--accent); border-color: var(--accent); }
+  .preset-bar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .7rem; }
+  .preset-bar > span { font-size: .78rem; color: var(--subtle); }
+  #portfolio-results { margin-top: 1.4rem; }
+  .preset-chip { position: relative; padding-right: 1.55rem !important; }
+  .preset-chip .preset-del { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%);
+                             font-size: .72rem; color: var(--subtle); cursor: pointer; line-height: 1; }
   .preset-chip .preset-del:hover { color: var(--red); }
 </style>
 </head>
 <body>
-<h1>펀드 분석 대시보드</h1>
-<p class="subtitle">생성일: %%GENERATED_AT%% | 무위험수익률: %%RISK_FREE%%%</p>
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">FA</div>
+    <div class="brand-text"><strong>펀드 분석</strong><span>Fund Analytics</span></div>
+  </div>
+  <nav class="side-nav" id="side-nav">
+    <button class="nav-item active" data-tab="panel-compare">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+      <span>자산 비교</span><span class="nav-badge" id="badge-compare">0</span>
+    </button>
+    <button class="nav-item" data-tab="panel-detail">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+      <span>개별 자산 상세</span><span class="nav-badge" id="badge-detail">0</span>
+    </button>
+    <button class="nav-item" data-tab="panel-portfolio">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9h-9V3z"/><path d="M15.5 3.6A9 9 0 0 1 20.4 8.5H15.5V3.6z"/></svg>
+      <span>포트폴리오 분석</span><span class="nav-badge" id="badge-portfolio">0</span>
+    </button>
+  </nav>
+  <div class="side-foot">
+    <div>생성 <b>%%GENERATED_AT%%</b></div>
+    <div>무위험수익률 <b>%%RISK_FREE%%%</b></div>
+  </div>
+</aside>
 
-<!-- Asset Filter -->
-<div class="asset-filter">
-  <h2>자산 선택</h2>
-  <div class="selector-columns">
-    <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="filter-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
-    <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="filter-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-us"></div></div>
-    <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="filter-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-index"></div></div>
-  </div>
-  <div class="filter-actions">
-    <button id="filter-all">전체 선택</button>
-    <button id="filter-none">전체 해제</button>
-  </div>
-</div>
+<main class="main"><div class="main-inner">
 
-<!-- Asset Comparison -->
-<section class="fund-section" id="comparison-section" style="display:none;">
-  <h2>자산 비교</h2>
-  <p class="fund-meta" id="comparison-meta"></p>
-  <div class="chart-container" style="height:400px;position:relative;">
-    <canvas id="comparison-chart"></canvas>
-    <div id="comp-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(37,99,235,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
-    <div id="comp-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;max-height:80%;overflow-y:auto;"></div>
+<!-- ══ Tab: 자산 비교 ══════════════════════════════════════ -->
+<section class="tab-panel active" id="panel-compare">
+  <header class="page-head">
+    <h1>자산 비교</h1>
+    <p>자산을 2개 이상 선택하면 공통 기간을 100으로 정규화해 성과·위험·상관관계를 비교합니다.</p>
+  </header>
+
+  <div class="asset-filter">
+    <div class="card-head">
+      <h2>자산 선택</h2>
+      <div class="filter-actions">
+        <button id="filter-all">전체 선택</button>
+        <button id="filter-none">전체 해제</button>
+      </div>
+    </div>
+    <div class="selector-columns">
+      <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="filter-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
+      <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="filter-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-us"></div></div>
+      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="filter-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-index"></div></div>
+    </div>
   </div>
-  <p style="font-size:0.75rem;color:#999;margin-top:-0.5rem;">차트에서 드래그하여 구간 비교</p>
-  <div id="comparison-summary"></div>
+
+  <section class="card" id="comparison-section" style="display:none;">
+    <h2>성과 비교</h2>
+    <p class="fund-meta" id="comparison-meta"></p>
+    <div class="chart-container" style="height:400px;position:relative;">
+      <canvas id="comparison-chart"></canvas>
+      <div id="comp-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(47,95,224,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
+      <div id="comp-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.96);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.78rem;line-height:1.5;box-shadow:0 6px 20px rgba(16,24,40,0.12);z-index:10;max-height:80%;overflow-y:auto;"></div>
+    </div>
+    <p class="hint">차트에서 드래그하여 구간 비교</p>
+    <div id="comparison-summary"></div>
+  </section>
+
+  <div class="empty" id="compare-empty">비교할 자산을 2개 이상 선택하세요.</div>
 </section>
 
-%%FUND_SECTIONS%%
+<!-- ══ Tab: 개별 자산 상세 ═════════════════════════════════ -->
+<section class="tab-panel" id="panel-detail">
+  <header class="page-head">
+    <h1>개별 자산 상세</h1>
+    <p><b>자산 비교</b> 탭에서 선택한 자산의 지표·차트·하락 이벤트를 개별로 확인합니다.</p>
+  </header>
 
-<!-- Portfolio Analyzer -->
-<section class="fund-section" id="portfolio">
-  <h2>포트폴리오 분석</h2>
-  <p class="fund-meta">펀드를 선택하고 비중을 입력한 뒤 분석 버튼을 클릭하세요</p>
-  <div class="portfolio-controls">
-    <div class="selector-columns" id="fund-selector">
-      <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="pf-insurance" data-modes="orig,jpy"></span></h4><div id="fund-selector-insurance"></div></div>
-      <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="pf-us" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-us"></div></div>
-      <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="pf-jp" data-modes="orig,krw"></span></h4><div id="fund-selector-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="pf-index" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-index"></div></div>
-    </div>
-    <div style="margin:0.8rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
-      <div class="weight-sum" id="weight-sum" style="margin:0;">비중 합계: 0%</div>
-      <span style="color:#888;">|</span>
-      <div style="font-size:0.85rem;display:flex;align-items:center;gap:0.5rem;">
-        <label>시작일 <input type="date" id="pf-start" style="padding:0.3rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;"></label>
-        <label>종료일 <input type="date" id="pf-end" style="padding:0.3rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;"></label>
-      </div>
-      <span id="pf-date-info" style="font-size:0.8rem;color:#888;"></span>
-    </div>
-    <button class="btn-analyze" id="btn-analyze" disabled>포트폴리오 분석</button>
-    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;">
-      <button class="btn-analyze" id="btn-save-preset" style="background:#666;padding:0.4rem 1rem;font-size:0.85rem;" disabled>현재 설정 저장</button>
-      <span style="font-size:0.8rem;color:#888;">저장된 포트폴리오:</span>
-      <div id="preset-chips" class="filter-chips" style="display:inline-flex;"></div>
-    </div>
-  </div>
-  <div id="portfolio-results" style="display:none">
-    <div class="metrics-grid" id="pf-metrics"></div>
-    <div class="chart-row">
-      <div class="chart-container" style="position:relative;">
-        <canvas id="pf-nav-chart"></canvas>
-        <div id="pf-selection-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(37,99,235,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
-        <div id="pf-selection-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;"></div>
-      </div>
-      <div class="chart-container"><canvas id="pf-dd-chart"></canvas></div>
-    </div>
-    <p style="font-size:0.75rem;color:#999;margin-top:-1rem;margin-bottom:1rem;">NAV 차트에서 드래그하여 구간 분석 (클릭하면 해제)</p>
-    <div id="pf-yearly"></div>
-    <div id="pf-trailing"></div>
-    <div id="pf-dd-table"></div>
-    <div id="pf-ls-table"></div>
-    <div id="pf-corr-table"></div>
-  </div>
+  %%FUND_SECTIONS%%
+
+  <div class="empty" id="detail-empty">선택된 자산이 없습니다. <b>자산 비교</b> 탭에서 자산을 선택하세요.</div>
 </section>
+
+<!-- ══ Tab: 포트폴리오 분석 ════════════════════════════════ -->
+<section class="tab-panel" id="panel-portfolio">
+  <header class="page-head">
+    <h1>포트폴리오 분석</h1>
+    <p>자산별 비중을 합계 100%로 맞춘 뒤 분석하면 가상 포트폴리오의 성과·위험·기여도를 계산합니다.</p>
+  </header>
+
+  <section class="card" id="portfolio">
+    <h2>구성 자산 및 비중</h2>
+    <p class="fund-meta">체크박스로 자산을 고르고 비중(%)을 입력하세요.</p>
+    <div class="portfolio-controls">
+      <div class="selector-columns" id="fund-selector">
+        <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="pf-insurance" data-modes="orig,jpy"></span></h4><div id="fund-selector-insurance"></div></div>
+        <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="pf-us" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-us"></div></div>
+        <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="pf-jp" data-modes="orig,krw"></span></h4><div id="fund-selector-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="pf-index" data-modes="orig,krw,jpy"></span></h4><div id="fund-selector-index"></div></div>
+      </div>
+      <div class="toolbar">
+        <div class="weight-sum" id="weight-sum">비중 합계: 0%</div>
+        <span class="sep">|</span>
+        <div style="font-size:0.8rem;color:var(--muted);display:flex;align-items:center;gap:0.5rem;">
+          <label>시작일 <input type="date" id="pf-start"></label>
+          <label>종료일 <input type="date" id="pf-end"></label>
+        </div>
+        <span id="pf-date-info" style="font-size:0.78rem;color:var(--subtle);"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <button class="btn-analyze" id="btn-analyze" disabled>포트폴리오 분석</button>
+        <button class="btn-analyze btn-ghost" id="btn-save-preset" disabled>현재 설정 저장</button>
+      </div>
+      <div class="preset-bar">
+        <span>저장된 포트폴리오</span>
+        <div id="preset-chips" class="filter-chips"></div>
+      </div>
+    </div>
+    <div id="portfolio-results" style="display:none">
+      <div class="metrics-grid" id="pf-metrics"></div>
+      <div class="chart-row">
+        <div class="chart-container" style="position:relative;">
+          <canvas id="pf-nav-chart"></canvas>
+          <div id="pf-selection-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(47,95,224,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
+          <div id="pf-selection-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.96);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.78rem;line-height:1.5;box-shadow:0 6px 20px rgba(16,24,40,0.12);z-index:10;"></div>
+        </div>
+        <div class="chart-container"><canvas id="pf-dd-chart"></canvas></div>
+      </div>
+      <p class="hint">NAV 차트에서 드래그하여 구간 분석 (클릭하면 해제)</p>
+      <div id="pf-yearly"></div>
+      <div id="pf-trailing"></div>
+      <div id="pf-dd-table"></div>
+      <div id="pf-ls-table"></div>
+      <div id="pf-corr-table"></div>
+    </div>
+  </section>
+</section>
+
+</div></main>
 
 <script>
 const FUNDS = %%FUND_JSON%%;
 const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 const CCY_SYMBOL = { USD: '$', JPY: '¥', KRW: '₩' };
 function ccySym(fund) { return CCY_SYMBOL[fund.currency] || fund.currency; }
+
+// ── Tab navigation (sidebar) ──
+function activateTab(tabId) {
+  document.querySelectorAll('#side-nav .nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === tabId));
+  // Charts created while their panel was hidden have zero size — re-measure now.
+  const panel = document.getElementById(tabId);
+  if (panel) panel.querySelectorAll('canvas').forEach(c => { const ch = Chart.getChart(c); if (ch) ch.resize(); });
+  if (history.replaceState) history.replaceState(null, '', '#' + tabId.replace('panel-', ''));
+}
+
+document.querySelectorAll('#side-nav .nav-item').forEach(btn => {
+  btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+});
+
+// Keep sidebar badges and empty-state placeholders in sync with the selections.
+function setBadge(id, n) {
+  const el = document.getElementById(id);
+  el.textContent = n;
+  el.classList.toggle('show', n > 0);
+}
+
+function refreshTabState() {
+  const picked = document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').length;
+  setBadge('badge-compare', picked);
+  setBadge('badge-detail', picked);
+  document.getElementById('compare-empty').style.display = picked >= 2 ? 'none' : '';
+  document.getElementById('detail-empty').style.display = picked > 0 ? 'none' : '';
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  const hash = location.hash.slice(1);
+  if (hash) {
+    const target = document.getElementById('panel-' + hash);
+    if (target) activateTab(target.id);
+  }
+  refreshTabState();
+});
 
 // Generic data getter respecting currency mode
 function getDataByMode(fund, mode, key) {
@@ -643,13 +852,22 @@ let compFullDates = [], compFullNavs = [], compSelectedIdxs = [];
 
 function updateComparison() {
   const section = document.getElementById('comparison-section');
+  const empty = document.getElementById('compare-empty');
   const selected = [];
   document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').forEach(cb => {
     selected.push(+cb.dataset.idx);
   });
+  refreshTabState();
 
-  if (selected.length < 2) { section.style.display = 'none'; return; }
+  const hideSection = (msg) => {
+    section.style.display = 'none';
+    empty.textContent = msg;
+    empty.style.display = '';
+  };
+
+  if (selected.length < 2) { hideSection('비교할 자산을 2개 이상 선택하세요.'); return; }
   section.style.display = '';
+  empty.style.display = 'none';
 
   // Find common date range (respecting per-asset currency toggle)
   const dailySets = selected.map(idx => {
@@ -659,7 +877,7 @@ function updateComparison() {
   const dateSets = dailySets.map(d => new Set(d.dates));
   const common = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
 
-  if (common.length < 2) { section.style.display = 'none'; return; }
+  if (common.length < 2) { hideSection('선택한 자산들의 공통 기간이 없습니다. 조합을 바꿔보세요.'); return; }
 
   // Build NAV series normalized to 100 at start
   const datasets = selected.map((idx, si) => {
@@ -1239,6 +1457,8 @@ function updateWeightSum() {
   el.textContent = `비중 합계: ${sum.toFixed(1)}%`;
   el.className = 'weight-sum' + (Math.abs(sum - 100) > 0.1 ? ' warn' : '');
   document.getElementById('btn-analyze').disabled = sel.length === 0 || Math.abs(sum - 100) > 0.1;
+  document.getElementById('btn-save-preset').disabled = sel.length === 0;
+  setBadge('badge-portfolio', sel.length);
 
   // Update common date range info
   const info = document.getElementById('pf-date-info');
@@ -1908,7 +2128,7 @@ function renderPresetChips() {
     });
     container.appendChild(chip);
   });
-  document.getElementById('btn-save-preset').disabled = false;
+  document.querySelector('.preset-bar').style.display = presets.length ? '' : 'none';
 }
 
 document.getElementById('btn-save-preset').addEventListener('click', () => {
