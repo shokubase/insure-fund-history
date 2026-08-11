@@ -290,6 +290,16 @@ HTML_TEMPLATE = """\
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>펀드 분석 대시보드</title>
+<script>
+// Resolve the theme before first paint so the page never flashes light-on-dark.
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem('fund_dashboard_theme'); } catch (e) {}
+  var dark = stored ? stored === 'dark'
+                    : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <style>
@@ -315,6 +325,28 @@ HTML_TEMPLATE = """\
     --shadow-sm: 0 1px 3px rgba(16,24,40,.07), 0 1px 2px rgba(16,24,40,.04);
     --shadow-md: 0 6px 20px rgba(16,24,40,.09);
     --sidebar-w: 250px;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1015;
+    --card: #171a21;
+    --surface: #171a21;
+    --surface-2: #1d212a;
+    --surface-3: #262b36;
+    --border: #272c37;
+    --border-strong: #3b4251;
+    --text: #e6e9ef;
+    --muted: #99a2b2;
+    --subtle: #6e778a;
+    --accent: #5b86f5;
+    --accent-hover: #7599f7;
+    --accent-soft: #1a2440;
+    --red: #f97066;
+    --green: #47cd89;
+    --shadow-xs: 0 1px 2px rgba(0,0,0,.35);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+    --shadow-md: 0 6px 20px rgba(0,0,0,.45);
+    color-scheme: dark;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', Roboto, sans-serif;
@@ -345,7 +377,15 @@ HTML_TEMPLATE = """\
                display: none; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
   .nav-badge.show { display: inline-flex; }
   .nav-item.active .nav-badge { background: var(--accent); color: #fff; }
-  .side-foot { margin-top: auto; padding: .85rem .6rem 0; border-top: 1px solid var(--border);
+  .side-bottom { margin-top: auto; }
+  .theme-toggle { display: flex; align-items: center; gap: .55rem; width: 100%; padding: .5rem .65rem;
+                  border: 1px solid var(--border); background: var(--surface-2); border-radius: var(--radius-sm);
+                  font: inherit; font-size: .8rem; color: var(--muted); cursor: pointer;
+                  transition: background .12s, color .12s, border-color .12s; }
+  .theme-toggle:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .theme-toggle svg { width: 16px; height: 16px; flex: none; }
+  :root[data-theme="dark"] .icon-moon, :root:not([data-theme="dark"]) .icon-sun { display: none; }
+  .side-foot { padding: .85rem .6rem 0; margin-top: .8rem; border-top: 1px solid var(--border);
                font-size: .72rem; color: var(--subtle); line-height: 1.85; }
   .side-foot b { color: var(--muted); font-weight: 600; }
 
@@ -371,7 +411,9 @@ HTML_TEMPLATE = """\
     .brand-text span { display: none; }
     .side-nav { flex: none; flex-direction: row; gap: .25rem; }
     .nav-item { white-space: nowrap; padding: .42rem .7rem; }
-    .side-foot { display: none; }
+    .side-bottom { flex: none; margin-top: 0; margin-left: auto; padding-left: .5rem; }
+    .theme-toggle { padding: .4rem .55rem; }
+    .theme-toggle .theme-label, .side-foot { display: none; }
     .main { margin-left: 0; padding: 1.2rem 1rem 3rem; }
   }
 
@@ -401,6 +443,14 @@ HTML_TEMPLATE = """\
   .negative { color: var(--red); }
 
   .chart-container { position: relative; height: 300px; margin-bottom: 1.4rem; }
+  /* Drag-to-select region + its readout, shared by every NAV chart. */
+  .drag-overlay { display: none; position: absolute; top: 0; height: 100%; pointer-events: none;
+                  background: color-mix(in srgb, var(--accent) 14%, transparent);
+                  border-left: 1px dashed var(--accent); border-right: 1px dashed var(--accent); }
+  .drag-stats { display: none; position: absolute; top: 8px; right: 8px; z-index: 10;
+                background: var(--surface); color: var(--text); border: 1px solid var(--border);
+                border-radius: 8px; padding: .5rem .8rem; font-size: .78rem; line-height: 1.5;
+                box-shadow: var(--shadow-md); }
   .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.4rem; }
   @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
 
@@ -519,9 +569,16 @@ HTML_TEMPLATE = """\
       <span>포트폴리오 분석</span><span class="nav-badge" id="badge-portfolio">0</span>
     </button>
   </nav>
-  <div class="side-foot">
-    <div>생성 <b>%%GENERATED_AT%%</b></div>
-    <div>무위험수익률 <b>%%RISK_FREE%%%</b></div>
+  <div class="side-bottom">
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="테마 전환">
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <span class="theme-label" id="theme-label">다크 모드</span>
+    </button>
+    <div class="side-foot">
+      <div>생성 <b>%%GENERATED_AT%%</b></div>
+      <div>무위험수익률 <b>%%RISK_FREE%%%</b></div>
+    </div>
   </div>
 </aside>
 
@@ -554,8 +611,8 @@ HTML_TEMPLATE = """\
     <p class="fund-meta" id="comparison-meta"></p>
     <div class="chart-container" style="height:400px;position:relative;">
       <canvas id="comparison-chart"></canvas>
-      <div id="comp-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(47,95,224,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
-      <div id="comp-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.96);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.78rem;line-height:1.5;box-shadow:0 6px 20px rgba(16,24,40,0.12);z-index:10;max-height:80%;overflow-y:auto;"></div>
+      <div class="drag-overlay" id="comp-overlay"></div>
+      <div class="drag-stats" id="comp-stats" style="max-height:80%;overflow-y:auto;"></div>
     </div>
     <p class="hint">차트에서 드래그하여 구간 비교</p>
     <div id="comparison-summary"></div>
@@ -615,8 +672,8 @@ HTML_TEMPLATE = """\
       <div class="chart-row">
         <div class="chart-container" style="position:relative;">
           <canvas id="pf-nav-chart"></canvas>
-          <div id="pf-selection-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(47,95,224,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
-          <div id="pf-selection-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.96);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.78rem;line-height:1.5;box-shadow:0 6px 20px rgba(16,24,40,0.12);z-index:10;"></div>
+          <div class="drag-overlay" id="pf-selection-overlay"></div>
+          <div class="drag-stats" id="pf-selection-stats"></div>
         </div>
         <div class="chart-container"><canvas id="pf-dd-chart"></canvas></div>
       </div>
@@ -637,6 +694,54 @@ const FUNDS = %%FUND_JSON%%;
 const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 const CCY_SYMBOL = { USD: '$', JPY: '¥', KRW: '₩' };
 function ccySym(fund) { return CCY_SYMBOL[fund.currency] || fund.currency; }
+
+// ── Theme (light / dark) ──
+// Chart.js resolves tick, grid and legend colours from its defaults once, when the
+// chart is constructed, and stores them on the instance. Updating the defaults only
+// covers charts built later, so already-live instances get overwritten in place.
+function syncChartTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const tick = css.getPropertyValue('--muted').trim();
+  const grid = css.getPropertyValue('--border').trim();
+  Chart.defaults.color = tick;
+  Chart.defaults.borderColor = grid;
+  document.querySelectorAll('canvas').forEach(c => {
+    const ch = Chart.getChart(c);
+    if (!ch) return;
+    // Assign into the existing option objects — replacing them drops the resolver
+    // entries Chart.js merged in (tick callbacks, legend generateLabels, ...).
+    Object.values(ch.options.scales || {}).forEach(sc => {
+      if (sc.grid) sc.grid.color = grid; else sc.grid = { color: grid };
+      if (sc.border) sc.border.color = grid; else sc.border = { color: grid };
+      if (sc.ticks) sc.ticks.color = tick; else sc.ticks = { color: tick };
+    });
+    const legend = ch.options.plugins && ch.options.plugins.legend;
+    if (legend) {
+      if (legend.labels) legend.labels.color = tick; else legend.labels = { color: tick };
+    }
+    ch.update('none');
+  });
+}
+
+function setTheme(theme, persist) {
+  document.documentElement.dataset.theme = theme;
+  if (persist) { try { localStorage.setItem('fund_dashboard_theme', theme); } catch (e) {} }
+  document.getElementById('theme-label').textContent = theme === 'dark' ? '라이트 모드' : '다크 모드';
+  syncChartTheme();
+}
+
+document.getElementById('theme-toggle').addEventListener('click', () => {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+});
+
+// Follow the OS setting until the user picks a theme explicitly.
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+  let stored = null;
+  try { stored = localStorage.getItem('fund_dashboard_theme'); } catch (err) {}
+  if (!stored) setTheme(e.matches ? 'dark' : 'light', false);
+});
+
+setTheme(document.documentElement.dataset.theme, false);
 
 // ── Tab navigation (sidebar) ──
 function activateTab(tabId) {
@@ -839,9 +944,9 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
 
 // ── Asset Comparison Chart ──
 const COMPARISON_COLORS = [
-  '#2563eb','#dc2626','#16a34a','#f59e0b','#8b5cf6',  // blue, red, green, amber, purple
+  '#3b82f6','#ef4444','#16a34a','#f59e0b','#8b5cf6',  // blue, red, green, amber, purple
   '#ec4899','#06b6d4','#f97316','#6366f1','#14b8a6',  // pink, cyan, orange, indigo, teal
-  '#78350f','#0d9488','#b91c1c','#4338ca','#a3e635',  // brown, dark teal, dark red, dark indigo, lime
+  '#a16207','#0d9488','#b91c1c','#4338ca','#a3e635',  // brown, dark teal, dark red, dark indigo, lime
   '#db2777','#0369a1','#c2410c','#7c3aed','#059669',  // magenta, dark blue, burnt orange, violet, emerald
   '#d97706','#be185d','#1d4ed8','#b45309','#7e22ce',  // dark amber, rose, royal blue, dark orange, deep purple
   '#15803d','#9333ea','#ea580c','#0891b2','#4f46e5',  // forest green, purple, deep orange, dark cyan, dark indigo
@@ -1050,8 +1155,8 @@ function renderComparisonSummary(selected, dates, navSets) {
 
     function corrCellStyle(v) {
       if (v >= 1) return 'background:#1d4ed8;color:#fff;';
-      if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'#1a1a1a'};`;
-      return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'#1a1a1a'};`;
+      if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'var(--text)'};`;
+      return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'var(--text)'};`;
     }
 
     let corrHeader = '<tr><th></th>' + metrics.map(m => `<th><span style="color:${m.color};">●</span> ${m.name}</th>`).join('') + '</tr>';
@@ -1224,9 +1329,9 @@ function initFundTrailing(prefix, dailyData) {
     fundTrailingCharts[uid] = new Chart(document.getElementById('tr-chart-'+uid), {
       type:'line',
       data:{labels:cd,datasets:[
-        {label:wy+'Y CAGR (%)',data:cr.map(v=>+v.toFixed(2)),borderColor:'#2563eb',backgroundColor:'rgba(37,99,235,0.08)',fill:true,pointRadius:0,borderWidth:1.5},
+        {label:wy+'Y CAGR (%)',data:cr.map(v=>+v.toFixed(2)),borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,0.12)',fill:true,pointRadius:0,borderWidth:1.5},
         {label:'평균',data:cd.map(()=>+avg.toFixed(2)),borderColor:'#888',borderDash:[5,5],pointRadius:0,borderWidth:1},
-        {label:'0%',data:cd.map(()=>0),borderColor:'#dc2626',borderDash:[3,3],pointRadius:0,borderWidth:1},
+        {label:'0%',data:cd.map(()=>0),borderColor:'#ef4444',borderDash:[3,3],pointRadius:0,borderWidth:1},
       ]},
       options:{responsive:true,maintainAspectRatio:false,
         scales:{x:{type:'time',time:{unit:'year'},ticks:{maxTicksLimit:8}},y:{ticks:{callback:v=>v+'%'}}},
@@ -1331,9 +1436,9 @@ function createSingleChart(idx) {
 
   // Orig charts + drag-select
   const origNav = renderChart(`chart-${idx}-orig-nav`, fund.chart.dates, fund.chart.nav,
-    '#2563eb', { label: '기준가', bg: 'rgba(37,99,235,0.08)' });
+    '#3b82f6', { label: '기준가', bg: 'rgba(59,130,246,0.12)' });
   renderChart(`chart-${idx}-orig-dd`, fund.chart.dates, fund.chart.drawdown,
-    '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+    '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
   fundCharts[`${idx}-orig`] = origNav;
   const origFull = rebuildNav(fund.daily);
   attachDragSelect(`chart-${idx}-orig-nav`, `chart-${idx}-orig-overlay`, `chart-${idx}-orig-stats`,
@@ -1342,9 +1447,9 @@ function createSingleChart(idx) {
   // USD-converted charts + drag-select (for KRW assets)
   if (fund.usd) {
     const usdConvNav = renderChart(`chart-${idx}-usd-conv-nav`, fund.usd.chart.dates, fund.usd.chart.nav,
-      '#2563eb', { label: '기준가 (USD)', bg: 'rgba(37,99,235,0.08)' });
+      '#3b82f6', { label: '기준가 (USD)', bg: 'rgba(59,130,246,0.12)' });
     renderChart(`chart-${idx}-usd-conv-dd`, fund.usd.chart.dates, fund.usd.chart.drawdown,
-      '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+      '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
     fundCharts[`${idx}-usd-conv`] = usdConvNav;
     const usdConvFull = rebuildNav(fund.usd.daily);
     attachDragSelect(`chart-${idx}-usd-conv-nav`, `chart-${idx}-usd-conv-overlay`, `chart-${idx}-usd-conv-stats`,
@@ -1354,9 +1459,9 @@ function createSingleChart(idx) {
   // KRW charts + drag-select
   if (fund.krw) {
     const krwNav = renderChart(`chart-${idx}-krw-nav`, fund.krw.chart.dates, fund.krw.chart.nav,
-      '#2563eb', { label: '기준가 (KRW)', bg: 'rgba(37,99,235,0.08)' });
+      '#3b82f6', { label: '기준가 (KRW)', bg: 'rgba(59,130,246,0.12)' });
     renderChart(`chart-${idx}-krw-dd`, fund.krw.chart.dates, fund.krw.chart.drawdown,
-      '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+      '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
     fundCharts[`${idx}-krw`] = krwNav;
     const krwFull = rebuildNav(fund.krw.daily);
     attachDragSelect(`chart-${idx}-krw-nav`, `chart-${idx}-krw-overlay`, `chart-${idx}-krw-stats`,
@@ -1366,9 +1471,9 @@ function createSingleChart(idx) {
   // JPY charts + drag-select (if available)
   if (fund.jpy) {
     const jpyNav = renderChart(`chart-${idx}-jpy-nav`, fund.jpy.chart.dates, fund.jpy.chart.nav,
-      '#2563eb', { label: '기준가 (JPY)', bg: 'rgba(37,99,235,0.08)' });
+      '#3b82f6', { label: '기준가 (JPY)', bg: 'rgba(59,130,246,0.12)' });
     renderChart(`chart-${idx}-jpy-dd`, fund.jpy.chart.dates, fund.jpy.chart.drawdown,
-      '#dc2626', { label: '드로다운 (%)', bg: 'rgba(220,38,38,0.15)', yOpts: { max: 0 } });
+      '#ef4444', { label: '드로다운 (%)', bg: 'rgba(239,68,68,0.16)', yOpts: { max: 0 } });
     fundCharts[`${idx}-jpy`] = jpyNav;
     const jpyFull = rebuildNav(fund.jpy.daily);
     attachDragSelect(`chart-${idx}-jpy-nav`, `chart-${idx}-jpy-overlay`, `chart-${idx}-jpy-stats`,
@@ -1725,12 +1830,12 @@ function renderTrailingReturns(dates, nav) {
       type: 'line',
       data: { labels: cDates, datasets: [
         { label: windowYears + 'Y CAGR (%)', data: cReturns.map(v => +v.toFixed(2)),
-          borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
+          borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)',
           fill: true, pointRadius: 0, borderWidth: 1.5 },
         { label: '평균', data: cDates.map(() => +avg.toFixed(2)),
           borderColor: '#888', borderDash: [5, 5], pointRadius: 0, borderWidth: 1 },
         { label: '0%', data: cDates.map(() => 0),
-          borderColor: '#dc2626', borderDash: [3, 3], pointRadius: 0, borderWidth: 1 },
+          borderColor: '#ef4444', borderDash: [3, 3], pointRadius: 0, borderWidth: 1 },
       ]},
       options: { responsive: true, maintainAspectRatio: false,
         scales: {
@@ -1810,7 +1915,7 @@ function renderPortfolio(pf) {
     type: 'line',
     data: { labels: chartDates, datasets: [{
       label: '포트폴리오 NAV', data: chartNav.map(v => +v.toFixed(2)),
-      borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
+      borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)',
       fill: true, pointRadius: 0, borderWidth: 1.5,
     }]},
     options: { responsive: true, maintainAspectRatio: false,
@@ -1823,7 +1928,7 @@ function renderPortfolio(pf) {
     type: 'line',
     data: { labels: chartDates, datasets: [{
       label: '드로다운 (%)', data: chartDd,
-      borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,0.15)',
+      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.16)',
       fill: true, pointRadius: 0, borderWidth: 1.5,
     }]},
     options: { responsive: true, maintainAspectRatio: false,
@@ -1860,7 +1965,7 @@ function renderPortfolio(pf) {
       <h3>LS vs DCA 분석</h3>
       <table><tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>${rows}</table>`;
   } else {
-    document.getElementById('pf-ls-table').innerHTML = '<p style="color:#888;">데이터 부족으로 LS vs DCA 분석 불가</p>';
+    document.getElementById('pf-ls-table').innerHTML = '<p style="color:var(--subtle);">데이터 부족으로 LS vs DCA 분석 불가</p>';
   }
 }
 
@@ -1915,8 +2020,8 @@ function renderCorrelation(selections) {
 
   function cellStyle(v) {
     if (v >= 1) return 'background:#1d4ed8;color:#fff;';
-    if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'#1a1a1a'};`;
-    return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'#1a1a1a'};`;
+    if (v >= 0) return `background:rgba(37,99,235,${(v*0.5).toFixed(2)});color:${v>0.7?'#fff':'var(--text)'};`;
+    return `background:rgba(220,38,38,${(Math.abs(v)*0.5).toFixed(2)});color:${v<-0.7?'#fff':'var(--text)'};`;
   }
 
   const header = '<tr><th></th>' + corr.names.map(n => `<th>${n}</th>`).join('') + '</tr>';
@@ -2028,7 +2133,7 @@ function renderYearlyBreakdown(selections, pf) {
   }
 
   let header = '<tr><th>연도</th>';
-  names.forEach((n, i) => { header += `<th>${n}<br><span style="font-weight:400;color:#888;">${(weights[i]*100).toFixed(0)}%</span></th>`; });
+  names.forEach((n, i) => { header += `<th>${n}<br><span style="font-weight:400;color:var(--subtle);">${(weights[i]*100).toFixed(0)}%</span></th>`; });
   header += '<th style="border-left:2px solid var(--border);">포트폴리오</th></tr>';
 
   let rows = '';
@@ -2036,7 +2141,7 @@ function renderYearlyBreakdown(selections, pf) {
     const yd = yearlyData(year);
     if (!yd) { rows += `<tr><td><b>${year}</b></td>${names.map(()=>'<td>-</td>').join('')}<td style="border-left:2px solid var(--border);">-</td></tr>`; continue; }
 
-    const yearLabel = yd.monthRange ? `${year}<br><span style="font-size:0.6rem;color:#999;">${yd.monthRange}</span>` : `${year}`;
+    const yearLabel = yd.monthRange ? `${year}<br><span style="font-size:0.6rem;color:var(--subtle);">${yd.monthRange}</span>` : `${year}`;
     let row = `<tr><td><b>${yearLabel}</b></td>`;
     yd.assetReturns.forEach((r, i) => {
       const c = yd.contribs[i];
@@ -2207,12 +2312,12 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
     <div class="chart-row">
       <div class="chart-container" style="position:relative;">
         <canvas id="{canvas_id_prefix}-nav"></canvas>
-        <div class="drag-overlay" id="{canvas_id_prefix}-overlay" style="display:none;position:absolute;top:0;height:100%;background:rgba(37,99,235,0.1);border-left:1px dashed var(--accent);border-right:1px dashed var(--accent);pointer-events:none;"></div>
-        <div class="drag-stats" id="{canvas_id_prefix}-stats" style="display:none;position:absolute;top:8px;right:8px;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.8rem;font-size:0.8rem;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:10;"></div>
+        <div class="drag-overlay" id="{canvas_id_prefix}-overlay"></div>
+        <div class="drag-stats" id="{canvas_id_prefix}-stats"></div>
       </div>
       <div class="chart-container"><canvas id="{canvas_id_prefix}-dd"></canvas></div>
     </div>
-    <p style="font-size:0.75rem;color:#999;margin-top:-1rem;margin-bottom:1rem;">차트에서 드래그하여 구간 분석</p>"""
+    <p class="hint">차트에서 드래그하여 구간 분석</p>"""
 
     events = data["top_events"]
     if events:
@@ -2244,7 +2349,7 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
     <table><tr><th>기간</th><th>관측수</th><th>LS 승률</th><th>MLSA</th><th>MLSD</th></tr>
       {ls_rows}</table>"""
     else:
-        ls_table = '<p style="color:#888;">데이터 부족으로 LS vs DCA 분석 불가</p>'
+        ls_table = '<p style="color:var(--subtle);">데이터 부족으로 LS vs DCA 분석 불가</p>'
 
     trailing = f'<div class="trailing-section" data-prefix="{canvas_id_prefix}"></div>'
 
@@ -2315,10 +2420,10 @@ def render_correlation_section(corr_data: dict | None) -> str:
         # Blue scale for positive, red scale for negative
         if val >= 0:
             opacity = val
-            return f"background: rgba(37,99,235,{opacity * 0.5:.2f}); color: {'#fff' if val > 0.7 else '#1a1a1a'};"
+            return f"background: rgba(37,99,235,{opacity * 0.5:.2f}); color: {'#fff' if val > 0.7 else 'var(--text)'};"
         else:
             opacity = abs(val)
-            return f"background: rgba(220,38,38,{opacity * 0.5:.2f}); color: {'#fff' if val < -0.7 else '#1a1a1a'};"
+            return f"background: rgba(220,38,38,{opacity * 0.5:.2f}); color: {'#fff' if val < -0.7 else 'var(--text)'};"
 
     header = "<tr><th></th>" + "".join(f"<th>{n}</th>" for n in names) + "</tr>"
     rows = ""
