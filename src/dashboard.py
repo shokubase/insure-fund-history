@@ -486,6 +486,22 @@ HTML_TEMPLATE = """\
   .filter-actions button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .fund-section.hidden { display: none; }
 
+  /* ── Period selector ───────────────────────────────────── */
+  .period-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .55rem; }
+  .period-row:first-of-type { margin-top: 0; }
+  .period-label { font-size: .7rem; color: var(--subtle); font-weight: 600; letter-spacing: .06em;
+                  text-transform: uppercase; width: 5.2rem; flex: none; }
+  .period-row label { font-size: .8rem; color: var(--muted); display: inline-flex;
+                      align-items: center; gap: .35rem; }
+  .period-chip { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 999px;
+                 padding: .28rem .72rem; font: inherit; font-size: .78rem; cursor: pointer;
+                 color: var(--muted); transition: all .12s; font-variant-numeric: tabular-nums; }
+  .period-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .period-chip.active { background: var(--accent); color: #fff; border-color: var(--accent);
+                        box-shadow: var(--shadow-xs); }
+  .period-info { font-size: .78rem; color: var(--subtle); font-variant-numeric: tabular-nums; }
+  @media (max-width: 760px) { .period-label { width: auto; } }
+
   .selector-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; }
   .selector-column h4 { font-size: .72rem; color: var(--subtle); font-weight: 600; letter-spacing: .06em;
                         text-transform: uppercase; margin-bottom: .5rem; padding-bottom: .32rem;
@@ -603,6 +619,26 @@ HTML_TEMPLATE = """\
       <div class="selector-column"><h4>보험펀드 <span class="col-ccy-toggle" data-col="filter-insurance" data-modes="orig,jpy"></span></h4><div class="filter-chips" id="filter-chips-insurance"></div></div>
       <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="filter-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-us"></div></div>
       <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="filter-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-index"></div></div>
+    </div>
+  </div>
+
+  <div class="asset-filter" id="compare-period" style="display:none;">
+    <div class="card-head">
+      <h2>기간 선택</h2>
+      <span class="period-info" id="comp-period-info"></span>
+    </div>
+    <div class="period-row">
+      <span class="period-label">빠른 선택</span>
+      <div class="filter-chips" id="comp-period-presets"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">연도</span>
+      <div class="filter-chips" id="comp-period-years"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">직접 입력</span>
+      <label>시작일 <input type="date" id="comp-start"></label>
+      <label>종료일 <input type="date" id="comp-end"></label>
     </div>
   </div>
 
@@ -955,6 +991,116 @@ const COMPARISON_COLORS = [
 let comparisonChart = null;
 let compFullDates = [], compFullNavs = [], compSelectedIdxs = [];
 
+// ── Comparison period selector ──
+// Every series is re-based to 100 at the range start, so narrowing the range is what
+// makes "how did these do in 2022" a different question from "since inception".
+let compRange = { start: '', end: '' };    // '' on either side = open (use the full common range)
+let compBounds = { start: '', end: '' };   // full common range of the current asset selection
+let compPreset = 'all';                    // 'all' | 'ytd' | '1y' | 'y2022' | ... | 'custom'
+
+function shiftYears(iso, n) {
+  const d = new Date(iso);
+  d.setFullYear(d.getFullYear() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Trailing windows longer than the available history would just repeat 전체 — drop them.
+function compPresetDefs(lo, hi) {
+  return [
+    { key: 'all', label: '전체', start: '', end: '' },
+    { key: 'ytd', label: 'YTD', start: hi.slice(0, 4) + '-01-01', end: hi },
+    { key: '1y', label: '최근 1년', start: shiftYears(hi, 1), end: hi },
+    { key: '3y', label: '최근 3년', start: shiftYears(hi, 3), end: hi },
+    { key: '5y', label: '최근 5년', start: shiftYears(hi, 5), end: hi },
+    { key: '10y', label: '최근 10년', start: shiftYears(hi, 10), end: hi },
+  ].filter(p => p.key === 'all' || p.start > lo);
+}
+
+// Keep a range picked for one asset combination usable after the combination changes.
+function clampCompRange() {
+  let { start, end } = compRange;
+  const before = start + '|' + end;
+  if (start && start < compBounds.start) start = compBounds.start;
+  if (end && end > compBounds.end) end = compBounds.end;
+  if (start && start > compBounds.end) start = '';
+  if (end && end < compBounds.start) end = '';
+  compRange = { start, end };
+  if (!start && !end) compPreset = 'all';
+  else if (start + '|' + end !== before) compPreset = 'custom';
+}
+
+function syncCompPeriodUI() {
+  const lo = compBounds.start, hi = compBounds.end;
+  document.getElementById('compare-period').style.display = '';
+  document.getElementById('comp-period-info').textContent = `전체 공통 기간 ${lo} ~ ${hi}`;
+
+  const startInput = document.getElementById('comp-start');
+  const endInput = document.getElementById('comp-end');
+  startInput.min = endInput.min = lo;
+  startInput.max = endInput.max = hi;
+  startInput.value = compRange.start || lo;
+  endInput.value = compRange.end || hi;
+
+  const presetBox = document.getElementById('comp-period-presets');
+  const defs = compPresetDefs(lo, hi);
+  const presetSig = defs.map(d => d.key).join(',') + '|' + hi;
+  if (presetBox.dataset.sig !== presetSig) {
+    presetBox.dataset.sig = presetSig;
+    presetBox.innerHTML = '';
+    defs.forEach(d => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'period-chip'; b.textContent = d.label; b.dataset.key = d.key;
+      b.addEventListener('click', () => {
+        compPreset = d.key;
+        compRange = { start: d.start, end: d.end };
+        updateComparison();
+      });
+      presetBox.appendChild(b);
+    });
+  }
+
+  const yearBox = document.getElementById('comp-period-years');
+  const y0 = +lo.slice(0, 4), y1 = +hi.slice(0, 4);
+  const yearSig = y0 + '-' + y1;
+  if (yearBox.dataset.sig !== yearSig) {
+    yearBox.dataset.sig = yearSig;
+    yearBox.innerHTML = '';
+    for (let y = y0; y <= y1; y++) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'period-chip'; b.textContent = y; b.dataset.key = 'y' + y;
+      b.addEventListener('click', () => {
+        // Clamp here, not in clampCompRange — a partial first/last year is still that year,
+        // and trimming it there would demote the chip to "custom".
+        const s = y + '-01-01', e = y + '-12-31';
+        compPreset = 'y' + y;
+        compRange = { start: s < compBounds.start ? compBounds.start : s,
+                      end: e > compBounds.end ? compBounds.end : e };
+        updateComparison();
+      });
+      yearBox.appendChild(b);
+    }
+  }
+
+  [...presetBox.children, ...yearBox.children]
+    .forEach(b => b.classList.toggle('active', b.dataset.key === compPreset));
+}
+
+(function() {
+  const startInput = document.getElementById('comp-start');
+  const endInput = document.getElementById('comp-end');
+  // Crossing the two dates opens the *other* end rather than swapping them — swapping
+  // would throw away the date the user just typed.
+  const onEdit = (edited) => {
+    let start = startInput.value, end = endInput.value;
+    if (start && end && start > end) { if (edited === 'start') end = ''; else start = ''; }
+    compRange = { start, end };
+    compPreset = 'custom';
+    updateComparison();
+  };
+  startInput.addEventListener('change', () => onEdit('start'));
+  endInput.addEventListener('change', () => onEdit('end'));
+})();
+
 function updateComparison() {
   const section = document.getElementById('comparison-section');
   const empty = document.getElementById('compare-empty');
@@ -964,15 +1110,15 @@ function updateComparison() {
   });
   refreshTabState();
 
-  const hideSection = (msg) => {
+  // keepPeriod: the range picker stays up when the range itself is what needs fixing.
+  const hideSection = (msg, keepPeriod) => {
     section.style.display = 'none';
+    if (!keepPeriod) document.getElementById('compare-period').style.display = 'none';
     empty.textContent = msg;
     empty.style.display = '';
   };
 
   if (selected.length < 2) { hideSection('비교할 자산을 2개 이상 선택하세요.'); return; }
-  section.style.display = '';
-  empty.style.display = 'none';
 
   // Find common date range (respecting per-asset currency toggle)
   const dailySets = selected.map(idx => {
@@ -980,9 +1126,20 @@ function updateComparison() {
     return getDataByMode(fund, filterCurrencyState[idx] || 'krw', 'daily');
   });
   const dateSets = dailySets.map(d => new Set(d.dates));
-  const common = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
+  const commonAll = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
 
-  if (common.length < 2) { hideSection('선택한 자산들의 공통 기간이 없습니다. 조합을 바꿔보세요.'); return; }
+  if (commonAll.length < 2) { hideSection('선택한 자산들의 공통 기간이 없습니다. 조합을 바꿔보세요.'); return; }
+
+  compBounds = { start: commonAll[0], end: commonAll[commonAll.length - 1] };
+  clampCompRange();
+  syncCompPeriodUI();
+
+  const common = commonAll.filter(d =>
+    (!compRange.start || d >= compRange.start) && (!compRange.end || d <= compRange.end));
+  if (common.length < 2) { hideSection('선택한 기간에 공통 데이터가 없습니다. 기간을 넓혀보세요.', true); return; }
+
+  section.style.display = '';
+  empty.style.display = 'none';
 
   // Build NAV series normalized to 100 at start
   const datasets = selected.map((idx, si) => {
@@ -1009,8 +1166,15 @@ function updateComparison() {
   compFullNavs = datasets;
   compSelectedIdxs = selected;
 
+  const narrowed = !!(compRange.start || compRange.end);
   document.getElementById('comparison-meta').textContent =
-    `공통 기간: ${common[0]} ~ ${common[common.length-1]} | 시작점 = 100으로 정규화`;
+    `${narrowed ? '선택 기간' : '공통 기간'}: ${common[0]} ~ ${common[common.length-1]}` +
+    ` (${common.length}거래일) | 시작점 = 100으로 정규화`;
+
+  // A one-year range on a 'year' axis draws a single tick — scale the unit to the span.
+  const spanDays = (new Date(chartDates[chartDates.length-1]) - new Date(chartDates[0])) / 86400000;
+  const timeUnit = spanDays > 1500 ? 'year' : spanDays > 400 ? 'quarter'
+                 : spanDays > 120 ? 'month' : spanDays > 35 ? 'week' : 'day';
 
   const chartDatasets = selected.map((idx, si) => {
     const dsNav = datasets[si].filter((_, i) => i % step === 0);
@@ -1030,7 +1194,7 @@ function updateComparison() {
     options: {
       responsive: true, maintainAspectRatio: false,
       scales: {
-        x: { type: 'time', time: { unit: 'year' }, ticks: { maxTicksLimit: 10 } },
+        x: { type: 'time', time: { unit: timeUnit }, ticks: { maxTicksLimit: 10 } },
         y: { beginAtZero: false }
       },
       plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 11 } } } }
@@ -1043,7 +1207,12 @@ function updateComparison() {
 
 function renderComparisonSummary(selected, dates, navSets) {
   const el = document.getElementById('comparison-summary');
-  if (selected.length < 2 || dates.length < 30) { el.innerHTML = ''; return; }
+  if (selected.length < 2) { el.innerHTML = ''; return; }
+  if (dates.length < 30) {
+    el.innerHTML = '<p class="fund-meta" style="margin-top:1rem;">선택 기간이 30거래일 미만이라 ' +
+                   '요약 지표(CAGR·변동성 등)는 생략했습니다.</p>';
+    return;
+  }
 
   const n = dates.length;
   const totalDays = (new Date(dates[n-1]) - new Date(dates[0])) / 86400000;
@@ -1099,7 +1268,10 @@ function renderComparisonSummary(selected, dates, navSets) {
     m.dates.forEach((d, i) => { map[d] = m.returns[i]; });
     return { dates: new Set(m.dates), map };
   });
-  let commonM = [...monthlyData[0].dates].filter(d => monthlyData.every(m => m.dates.has(d))).sort();
+  let commonM = [...monthlyData[0].dates]
+    .filter(d => monthlyData.every(m => m.dates.has(d)))
+    .filter(d => (!compRange.start || d >= compRange.start) && (!compRange.end || d <= compRange.end))
+    .sort();
 
   const pc = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
   const fp = (v, s) => (s && v > 0 ? '+' : '') + v.toFixed(2) + '%';
@@ -1173,7 +1345,7 @@ function renderComparisonSummary(selected, dates, navSets) {
   }
 
   el.innerHTML = `
-    <h3>요약 비교 (공통 기간 ${dates[0]} ~ ${dates[n-1]})</h3>
+    <h3>요약 비교 (${compRange.start || compRange.end ? '선택 기간' : '공통 기간'} ${dates[0]} ~ ${dates[n-1]})</h3>
     <div style="overflow-x:auto;">
     <table style="font-size:0.8rem;min-width:100%;">
       ${header}${rows}
