@@ -6,3 +6,4 @@ smoke_response.html
 data/dashboard.html
 *.swp
 .DS_Store
+.playwright-mcp/
