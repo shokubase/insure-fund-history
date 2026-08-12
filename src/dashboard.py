@@ -345,6 +345,7 @@ HTML_TEMPLATE = """\
     --side-hover: rgba(255,255,255,.07);
     --side-active-bg: rgba(91,134,245,.20);
     --side-active-text: #93b0ff;
+    --taa-band: rgba(207,42,30,.07);
     color-scheme: light;
   }
   :root[data-theme="dark"] {
@@ -367,6 +368,7 @@ HTML_TEMPLATE = """\
     --shadow-sm: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
     --shadow-md: 0 6px 20px rgba(0,0,0,.45);
     --side-bg: #101318;
+    --taa-band: rgba(249,112,102,.10);
     color-scheme: dark;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -466,8 +468,10 @@ HTML_TEMPLATE = """\
   .negative { color: var(--red); }
 
   .chart-container { position: relative; height: 300px; margin-bottom: 1.4rem; }
-  /* Drag-to-select region + its readout, shared by every NAV chart. */
-  .drag-overlay { display: none; position: absolute; top: 0; height: 100%; pointer-events: none;
+  /* Drag-to-select region + its readout, shared by every NAV chart.
+     top/height are set from the chart's plot area at drag time so the band never spills
+     over the axis gutters. */
+  .drag-overlay { display: none; position: absolute; top: 0; height: 0; pointer-events: none;
                   background: color-mix(in srgb, var(--accent) 14%, transparent);
                   border-left: 1px dashed var(--accent); border-right: 1px dashed var(--accent); }
   .drag-stats { display: none; position: absolute; top: 8px; right: 8px; z-index: 10;
@@ -601,6 +605,30 @@ HTML_TEMPLATE = """\
   .preset-chip .preset-del { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%);
                              font-size: .72rem; color: var(--subtle); cursor: pointer; line-height: 1; }
   .preset-chip .preset-del:hover { color: var(--red); }
+
+  /* ── 추세 신호 ─────────────────────────────────────────── */
+  .sig-badge { display: inline-flex; align-items: center; gap: .3rem; padding: .12rem .5rem;
+               border-radius: 999px; font-size: .74rem; font-weight: 650; letter-spacing: -.01em;
+               border: 1px solid transparent; white-space: nowrap; }
+  .sig-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .sig-hold { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent);
+              border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+  .sig-cash { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent);
+              border-color: color-mix(in srgb, var(--red) 30%, transparent); }
+  /* 가격은 위, 기울기는 아래 — 규칙상 보유지만 추세는 이미 꺾인 상태. */
+  .sig-warn { color: #b7791f; background: rgba(183,121,31,.12); border-color: rgba(183,121,31,.32); }
+  :root[data-theme="dark"] .sig-warn { color: #e3b341; background: rgba(227,179,65,.13);
+                                       border-color: rgba(227,179,65,.3); }
+
+  .taa-asset { margin-bottom: 1.1rem; }
+  .taa-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .2rem; }
+  .taa-head h3 { font-size: 1rem; font-weight: 650; letter-spacing: -.015em; }
+  .taa-facts { display: flex; flex-wrap: wrap; gap: .35rem .5rem; margin: .55rem 0 .8rem; }
+  .taa-fact { flex: 1 1 116px; padding: .45rem .6rem; border-radius: var(--radius-sm);
+              background: var(--surface-2); border: 1px solid var(--border); }
+  .taa-fact span { display: block; font-size: .69rem; color: var(--subtle); margin-bottom: .1rem; }
+  .taa-fact b { font-size: .92rem; font-weight: 640; font-variant-numeric: tabular-nums; }
+  .taa-sub { font-size: .78rem; color: var(--muted); margin: .35rem 0 .1rem; }
 </style>
 </head>
 <body>
@@ -613,6 +641,10 @@ HTML_TEMPLATE = """\
     <button class="nav-item active" data-tab="panel-compare">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
       <span>자산 비교</span><span class="nav-badge" id="badge-compare">0</span>
+    </button>
+    <button class="nav-item" data-tab="panel-taa">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 4-6 5 4"/><path d="M3 21h18"/><path d="M3 8c4 3 8 1 12-2"/></svg>
+      <span>추세 신호</span><span class="nav-badge" id="badge-taa">0</span>
     </button>
     <button class="nav-item" data-tab="panel-detail">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
@@ -704,6 +736,77 @@ HTML_TEMPLATE = """\
   </section>
 
   <div class="empty" id="compare-empty">자산을 1개 이상 선택하세요.</div>
+</section>
+
+<!-- ══ Tab: 추세 신호 ══════════════════════════════════════ -->
+<section class="tab-panel" id="panel-taa">
+  <header class="page-head">
+    <h1>추세 신호</h1>
+    <p>Faber 의 TAA 규칙입니다. <b>기준가 &gt; 이동평균</b> 이면 보유, 아래면 현금.
+       <b>자산 비교</b> 탭에서 고른 자산을 그대로 씁니다. 이동평균은 선택 기간과 무관하게
+       항상 전체 이력으로 계산하므로, 기간을 좁혀도 첫 구간이 비지 않습니다.</p>
+  </header>
+
+  <div class="asset-filter" id="taa-config" style="display:none;">
+    <div class="card-head">
+      <h2>규칙 설정</h2>
+      <span class="period-info" id="taa-rule-info"></span>
+    </div>
+    <div class="period-row">
+      <span class="period-label">이동평균</span>
+      <div class="filter-chips" id="taa-win"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">판정 주기</span>
+      <div class="filter-chips" id="taa-cadence">
+        <button class="period-chip active" type="button" data-v="month">월말</button>
+        <button class="period-chip" type="button" data-v="day">매일</button>
+      </div>
+      <span class="hint" style="margin:0;">매일 판정은 위프소가 급증합니다 — 아래 백테스트로 확인하세요.</span>
+    </div>
+    <div class="period-row">
+      <span class="period-label">기울기 필터</span>
+      <div class="filter-chips" id="taa-slope">
+        <button class="period-chip active" type="button" data-v="1">사용</button>
+        <button class="period-chip" type="button" data-v="0">미사용</button>
+      </div>
+      <span class="hint" style="margin:0;">이동평균 기울기 &gt; 0 도 함께 요구 (= 200일 모멘텀 &gt; 0)</span>
+    </div>
+    <div class="period-row">
+      <span class="period-label">밴드</span>
+      <div class="filter-chips" id="taa-buffer"></div>
+      <span class="hint" style="margin:0;">이동평균 ±밴드 안쪽은 신호로 보지 않음 (경계 진동 억제)</span>
+    </div>
+  </div>
+
+  <div class="asset-filter" id="taa-period" style="display:none;">
+    <div class="card-head">
+      <h2>표시 · 백테스트 기간</h2>
+      <span class="period-info" id="taa-period-info"></span>
+    </div>
+    <div class="period-row">
+      <span class="period-label">빠른 선택</span>
+      <div class="filter-chips" id="taa-period-presets"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">연도</span>
+      <div class="filter-chips" id="taa-period-years"></div>
+    </div>
+    <div class="period-row">
+      <span class="period-label">직접 입력</span>
+      <label>시작일 <input type="date" id="taa-start"></label>
+      <label>종료일 <input type="date" id="taa-end"></label>
+    </div>
+  </div>
+
+  <section class="card" id="taa-status-card" style="display:none;">
+    <div class="card-head"><h2>현재 신호</h2></div>
+    <div id="taa-status"></div>
+  </section>
+
+  <div id="taa-assets"></div>
+
+  <div class="empty" id="taa-empty">선택된 자산이 없습니다. <b>자산 비교</b> 탭에서 자산을 선택하세요.</div>
 </section>
 
 <!-- ══ Tab: 개별 자산 상세 ═════════════════════════════════ -->
@@ -893,11 +996,13 @@ function setBadge(id, n) {
 function refreshTabState() {
   const picked = document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').length;
   setBadge('badge-compare', picked);
+  setBadge('badge-taa', picked);
   setBadge('badge-detail', picked);
   document.getElementById('compare-empty').style.display = picked >= 1 ? 'none' : '';
   document.getElementById('detail-empty').style.display = picked > 0 ? 'none' : '';
   // Runs after the chip handlers have toggled section visibility and built any new charts.
   refreshDetailPeriod();
+  refreshTaa();
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -1024,7 +1129,8 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
     chip.className = 'filter-chip';
     chip.innerHTML = `<input type="checkbox" data-idx="${idx}">${chipLabel(fund)}`;
 
-    const fToggle = buildCcyToggle(fund, idx, 'margin:0 0 0 0.3rem;display:inline-flex;', filterCurrencyState, updateComparison);
+    const fToggle = buildCcyToggle(fund, idx, 'margin:0 0 0 0.3rem;display:inline-flex;', filterCurrencyState,
+                                   () => { updateComparison(); refreshTaa(); });
     if (fToggle) chip.appendChild(fToggle);
 
     chip.addEventListener('click', (e) => {
@@ -1639,61 +1745,106 @@ function renderTrackingSummary(selected, dates, netNavs, grossSets) {
     </div>${hint}`;
 }
 
-// Drag-select for comparison chart
-(function() {
-  const canvas = document.getElementById('comparison-chart');
-  const overlay = document.getElementById('comp-overlay');
-  const statsBox = document.getElementById('comp-stats');
+// ── Shared drag-to-select plumbing ──
+// Paints the selection band over the plot area only (never the axis gutters) and hands the
+// picked date range to `onSelect`, which returns false when it has nothing to show — the
+// band is dropped in that case so a fruitless drag never leaves shading behind.
+// The pointer is captured on press, so releasing outside the canvas still completes the
+// selection instead of silently aborting it.
+function attachDragCore(canvasId, overlayId, statsId, chartRef, onSelect) {
+  const canvas = document.getElementById(canvasId);
+  const overlay = document.getElementById(overlayId);
+  const statsBox = document.getElementById(statsId);
+  if (!canvas || !overlay || !statsBox) return null;
+
+  canvas.style.cursor = 'crosshair';
+  canvas.style.touchAction = 'none';   // let the pointer drag win over touch scrolling
+
   let dragStart = null, dragging = false;
 
-  function clear() { overlay.style.display = 'none'; statsBox.style.display = 'none'; }
-
-  function showStats(d1, d2) {
-    if (compFullDates.length === 0) return;
-    let si = compFullDates.findIndex(d => d >= d1);
-    let ei = compFullDates.length - 1;
-    for (let i = compFullDates.length - 1; i >= 0; i--) { if (compFullDates[i] <= d2) { ei = i; break; } }
-    if (si < 0 || si >= ei || ei - si < 2) { statsBox.style.display = 'none'; return; }
-
-    const pc = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
-    let html = `<div style="font-weight:600;margin-bottom:0.3rem;">${compFullDates[si]} ~ ${compFullDates[ei]}</div>`;
-    compSelectedIdxs.forEach((idx, ai) => {
-      const nav = compFullNavs[ai];
-      const ret = ((nav[ei] / nav[si] - 1) * 100).toFixed(2);
-      const color = COMPARISON_COLORS[idx % COMPARISON_COLORS.length];
-      html += `<div><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:4px;"></span>${FUNDS[idx].shortName || FUNDS[idx].name}: <b class="${pc(ret)}">${+ret > 0 ? '+' : ''}${ret}%</b></div>`;
-    });
-    statsBox.innerHTML = html;
-    statsBox.style.display = 'block';
+  function clear() {
+    overlay.style.display = 'none'; statsBox.style.display = 'none';
+    dragStart = null; dragging = false;
+  }
+  // Chart.js x values are local-midnight timestamps; toISOString would shift them a day
+  // back in KST, so format the date in local time.
+  function localDate(ms) {
+    const d = new Date(ms), p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  function posX(e, chart) {
+    const rect = canvas.getBoundingClientRect();
+    return Math.max(chart.chartArea.left, Math.min(e.clientX - rect.left, chart.chartArea.right));
+  }
+  function paint(chart, x) {
+    const a = chart.chartArea;
+    overlay.style.top = a.top + 'px';
+    overlay.style.height = a.height + 'px';
+    overlay.style.left = Math.min(dragStart, x) + 'px';
+    overlay.style.width = Math.abs(x - dragStart) + 'px';
   }
 
-  canvas.addEventListener('mousedown', (e) => {
-    if (!comparisonChart) return;
-    const rect = canvas.getBoundingClientRect(), x = e.clientX - rect.left;
-    if (x < comparisonChart.chartArea.left || x > comparisonChart.chartArea.right) return;
-    dragStart = x; dragging = true;
-    overlay.style.display = 'block'; overlay.style.left = x + 'px'; overlay.style.width = '0px';
+  canvas.addEventListener('pointerdown', (e) => {
+    const chart = chartRef();
+    if (!chart || e.button !== 0) return;
+    // A press anywhere on the canvas starts a drag — x is clamped to the plot, so grabbing
+    // the y-axis gutter works too.
+    dragStart = posX(e, chart); dragging = true;
+    overlay.style.display = 'block'; paint(chart, dragStart);
     statsBox.style.display = 'none';
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
   });
-  canvas.addEventListener('mousemove', (e) => {
-    if (!dragging || !comparisonChart) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.max(comparisonChart.chartArea.left, Math.min(e.clientX - rect.left, comparisonChart.chartArea.right));
-    overlay.style.left = Math.min(dragStart, x) + 'px'; overlay.style.width = Math.abs(x - dragStart) + 'px';
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const chart = chartRef();
+    if (!chart) { clear(); return; }
+    paint(chart, posX(e, chart));
   });
-  canvas.addEventListener('mouseup', (e) => {
-    if (!dragging || !comparisonChart) return;
+  canvas.addEventListener('pointerup', (e) => {
+    if (!dragging) return;
     dragging = false;
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.max(comparisonChart.chartArea.left, Math.min(e.clientX - rect.left, comparisonChart.chartArea.right));
-    if (Math.abs(x - dragStart) < 5) { clear(); return; }
-    const scale = comparisonChart.scales.x;
-    const d1 = new Date(scale.getValueForPixel(Math.min(dragStart, x))).toISOString().slice(0, 10);
-    const d2 = new Date(scale.getValueForPixel(Math.max(dragStart, x))).toISOString().slice(0, 10);
-    showStats(d1, d2);
+    const chart = chartRef();
+    if (!chart) { clear(); return; }
+    const x = posX(e, chart);
+    if (Math.abs(x - dragStart) < 5) { clear(); return; }   // a plain click clears
+    const scale = chart.scales.x;
+    const d1 = localDate(scale.getValueForPixel(Math.min(dragStart, x)));
+    const d2 = localDate(scale.getValueForPixel(Math.max(dragStart, x)));
+    if (!onSelect(d1, d2)) clear();
   });
-  canvas.addEventListener('mouseleave', () => { if (dragging) dragging = false; });
-})();
+  canvas.addEventListener('pointercancel', clear);
+  return clear;
+}
+
+// Index range of [d1, d2] within a sorted date array; null when too thin to summarize.
+function selectionRange(fullDates, d1, d2) {
+  if (!fullDates || fullDates.length === 0) return null;
+  const si = fullDates.findIndex(d => d >= d1);
+  let ei = -1;
+  for (let i = fullDates.length - 1; i >= 0; i--) { if (fullDates[i] <= d2) { ei = i; break; } }
+  if (si < 0 || ei < 0 || ei - si < 2) return null;
+  return [si, ei];
+}
+
+// Drag-select for comparison chart
+attachDragCore('comparison-chart', 'comp-overlay', 'comp-stats', () => comparisonChart, (d1, d2) => {
+  const range = selectionRange(compFullDates, d1, d2);
+  if (!range) return false;
+  const [si, ei] = range;
+  const statsBox = document.getElementById('comp-stats');
+  const pc = v => +v > 0 ? 'positive' : +v < 0 ? 'negative' : '';
+  let html = `<div style="font-weight:600;margin-bottom:0.3rem;">${compFullDates[si]} ~ ${compFullDates[ei]}</div>`;
+  compSelectedIdxs.forEach((idx, ai) => {
+    const nav = compFullNavs[ai];
+    const ret = ((nav[ei] / nav[si] - 1) * 100).toFixed(2);
+    const color = COMPARISON_COLORS[idx % COMPARISON_COLORS.length];
+    html += `<div><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:4px;"></span>${FUNDS[idx].shortName || FUNDS[idx].name}: <b class="${pc(ret)}">${+ret > 0 ? '+' : ''}${ret}%</b></div>`;
+  });
+  statsBox.innerHTML = html;
+  statsBox.style.display = 'block';
+  return true;
+});
 
 function renderChart(canvasId, labels, data, color, opts) {
   const ctx = document.getElementById(canvasId);
@@ -1808,22 +1959,15 @@ function initFundTrailing(prefix, dailyData) {
 
 // Reusable drag-to-select for any NAV chart
 function attachDragSelect(canvasId, overlayId, statsId, chartRef, fullDatesOrFn, fullNavOrFn) {
-  const canvas = document.getElementById(canvasId);
-  const overlay = document.getElementById(overlayId);
   const statsBox = document.getElementById(statsId);
-  if (!canvas || !overlay || !statsBox) return;
-
-  let dragStart = null, dragging = false;
-
-  function clear() { overlay.style.display = 'none'; statsBox.style.display = 'none'; dragStart = null; dragging = false; }
+  if (!statsBox) return;
 
   function showStats(d1, d2) {
     const fullDates = typeof fullDatesOrFn === 'function' ? fullDatesOrFn() : fullDatesOrFn;
     const fullNav = typeof fullNavOrFn === 'function' ? fullNavOrFn() : fullNavOrFn;
-    let si = fullDates.findIndex(d => d >= d1);
-    let ei = fullDates.length - 1;
-    for (let i = fullDates.length - 1; i >= 0; i--) { if (fullDates[i] <= d2) { ei = i; break; } }
-    if (si < 0 || si >= ei || ei - si < 2) { statsBox.style.display = 'none'; return; }
+    const range = selectionRange(fullDates, d1, d2);
+    if (!range) return false;
+    const [si, ei] = range;
     const dates = fullDates.slice(si, ei+1), nav = fullNav.slice(si, ei+1), n = nav.length;
     const totalDays = (new Date(dates[n-1]) - new Date(dates[0])) / 86400000;
     const totalYears = totalDays / 365.25;
@@ -1847,39 +1991,10 @@ function attachDragSelect(canvasId, overlayId, statsId, chartRef, fullDatesOrFn,
       `<div>변동성(월간): <b>${vol}%</b></div>`+
       `<div>MDD: <b class="negative">${(mdd*100).toFixed(2)}%</b></div>`;
     statsBox.style.display = 'block';
+    return true;
   }
 
-  canvas.addEventListener('mousedown', (e) => {
-    const chart = chartRef();
-    if (!chart) return;
-    const rect = canvas.getBoundingClientRect(), x = e.clientX - rect.left;
-    if (x < chart.chartArea.left || x > chart.chartArea.right) return;
-    dragStart = x; dragging = true;
-    overlay.style.display = 'block'; overlay.style.left = x+'px'; overlay.style.width = '0px';
-    statsBox.style.display = 'none';
-  });
-  canvas.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    const chart = chartRef();
-    if (!chart) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.max(chart.chartArea.left, Math.min(e.clientX-rect.left, chart.chartArea.right));
-    overlay.style.left = Math.min(dragStart,x)+'px'; overlay.style.width = Math.abs(x-dragStart)+'px';
-  });
-  canvas.addEventListener('mouseup', (e) => {
-    if (!dragging) return;
-    dragging = false;
-    const chart = chartRef();
-    if (!chart) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.max(chart.chartArea.left, Math.min(e.clientX-rect.left, chart.chartArea.right));
-    if (Math.abs(x-dragStart) < 5) { clear(); return; }
-    const scale = chart.scales.x;
-    const d1 = new Date(scale.getValueForPixel(Math.min(dragStart,x))).toISOString().slice(0,10);
-    const d2 = new Date(scale.getValueForPixel(Math.max(dragStart,x))).toISOString().slice(0,10);
-    showStats(d1, d2);
-  });
-  canvas.addEventListener('mouseleave', () => { if (dragging) dragging = false; });
+  attachDragCore(canvasId, overlayId, statsId, chartRef, showStats);
 }
 
 const fundCharts = {};
@@ -2116,6 +2231,360 @@ const detailPeriod = makePeriodPicker({
   years: 'detail-period-years', start: 'detail-start', end: 'detail-end',
   infoLabel: '전체 기간',
 }, () => refreshDetailPeriod());
+
+// ══ 추세 신호 (Faber TAA) ══════════════════════════════════════════════
+// 규칙: 기준가 > 이동평균 → 보유, 아니면 현금. 이동평균은 언제나 전체 이력으로 계산하고
+// 표시·백테스트 구간만 잘라낸다 — 구간 시작 200일치를 못 채워 신호가 비는 걸 막기 위해서다.
+
+const taaState = { win: 200, cadence: 'month', slope: true, buffer: 0 };
+const taaCharts = {};
+
+// 매도 구간을 차트 배경에 칠한다. annotation 플러그인을 쓰지 않으려고 직접 그린다.
+Chart.register({
+  id: 'taaBands',
+  beforeDatasetsDraw(chart) {
+    const bands = (chart.options.plugins.taaBands || {}).bands;
+    if (!bands || !bands.length) return;
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    ctx.save();
+    ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--taa-band') || 'rgba(207,42,30,.08)';
+    bands.forEach(([s, e]) => {
+      const l = Math.max(x.getPixelForValue(new Date(s).getTime()), a.left);
+      const r = Math.min(x.getPixelForValue(new Date(e).getTime()), a.right);
+      if (r > l) ctx.fillRect(l, a.top, r - l, a.bottom - a.top);
+    });
+    ctx.restore();
+  },
+});
+
+// 전체 해상도 기준가. chart.nav 는 500포인트로 다운샘플된 값이라 이동평균 계산에 못 쓴다.
+// 대신 chart.nav[0](실제 첫 기준가)에서 일별 수익률을 복리로 쌓아 매 거래일을 되살린다.
+function taaLevels(fund, mode) {
+  const daily = getDataByMode(fund, mode, 'daily');
+  const chart = getDataByMode(fund, mode, 'chart');
+  if (!daily || !chart || !daily.dates.length) return null;
+  const nav = [chart.nav[0]];
+  for (let i = 0; i < daily.returns.length; i++) nav.push(nav[nav.length - 1] * (1 + daily.returns[i]));
+  return { dates: [chart.dates[0], ...daily.dates], nav };
+}
+
+function smaSeries(nav, w) {
+  const out = new Array(nav.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < nav.length; i++) {
+    sum += nav[i];
+    if (i >= w) sum -= nav[i - w];
+    if (i >= w - 1) out[i] = sum / w;
+  }
+  return out;
+}
+
+// 이동평균의 1일 변화는 (P_t - P_{t-w}) / w 라서, 그 부호는 w일 모멘텀의 부호와 정확히 같다.
+// 기울기 필터를 "200일 전보다 높은가"로 구현하는 근거이자, 화면에서 둘을 나란히 두는 이유.
+function taaCompute(series, st) {
+  const { dates, nav } = series, n = nav.length, w = st.win;
+  const ma = smaSeries(nav, w);
+  const gap = new Array(n).fill(null);     // 이격도 %
+  const slope = new Array(n).fill(null);   // 이동평균 1일 기울기, 연율 %
+  const want = new Array(n).fill(null);    // 그날의 규칙 판정
+  for (let i = 0; i < n; i++) {
+    if (ma[i] == null) continue;
+    gap[i] = (nav[i] / ma[i] - 1) * 100;
+    if (ma[i - 1] != null) slope[i] = (ma[i] / ma[i - 1] - 1) * 100 * 252;
+    let ok = nav[i] > ma[i] * (1 + st.buffer / 100);
+    // 밴드 안쪽이면 직전 상태를 유지 — 여기서 want 를 확정하지 않고 뒤에서 이어받는다.
+    if (nav[i] < ma[i] * (1 - st.buffer / 100)) ok = false;
+    else if (!ok) ok = null;
+    if (ok && st.slope && !(i >= w && nav[i] > nav[i - w])) ok = false;
+    want[i] = ok;
+  }
+
+  // 판정 주기 적용. 월말 규칙은 그달 마지막 거래일에만 상태를 바꾼다 (Faber 원문의 월말 체크).
+  const pos = new Array(n).fill(null);
+  let held = null;
+  const firstValid = ma.findIndex(v => v != null);
+  for (let i = 0; i < n; i++) {
+    if (i < firstValid) continue;
+    const monthEnd = i === n - 1 || dates[i + 1].slice(0, 7) !== dates[i].slice(0, 7);
+    const decide = st.cadence === 'day' || held === null || monthEnd;
+    if (decide && want[i] !== null) held = want[i];
+    if (held === null) held = nav[i] > ma[i];   // 밴드 안에서 시작한 경우의 초기값
+    pos[i] = held;
+  }
+  return { dates, nav, ma, gap, slope, pos, firstValid };
+}
+
+// 실제 매매는 신호 다음 거래일 기준가로 체결된다고 본다 (기준가 반영 지연 T+1).
+function taaBacktest(t, si, ei) {
+  let eq = 1, bh = 1, peak = 1, mdd = 0, bpeak = 1, bmdd = 0, trades = 0, inMkt = 0, days = 0;
+  const eqCurve = [], bhCurve = [];
+  for (let i = si; i <= ei; i++) {
+    if (i > si) {
+      const r = t.nav[i] / t.nav[i - 1] - 1;
+      const held = !!t.pos[i - 1];
+      eq *= 1 + (held ? r : 0);
+      bh *= 1 + r;
+      if (t.pos[i] !== t.pos[i - 1]) trades++;
+      inMkt += held ? 1 : 0;
+      days++;
+    }
+    peak = Math.max(peak, eq); mdd = Math.min(mdd, eq / peak - 1);
+    bpeak = Math.max(bpeak, bh); bmdd = Math.min(bmdd, bh / bpeak - 1);
+    eqCurve.push(eq * 100); bhCurve.push(bh * 100);
+  }
+  const yrs = (new Date(t.dates[ei]) - new Date(t.dates[si])) / (365.25 * 86400000);
+  return {
+    eqCurve, bhCurve, trades, exposure: days ? inMkt / days * 100 : 0,
+    taaCagr: yrs > 0 ? (Math.pow(eq, 1 / yrs) - 1) * 100 : null,
+    bhCagr: yrs > 0 ? (Math.pow(bh, 1 / yrs) - 1) * 100 : null,
+    taaMdd: mdd * 100, bhMdd: bmdd * 100, years: yrs,
+  };
+}
+
+// 신호별로 "그 판단이 옳았나"를 뒤에서 채점한다. 매도 구간은 기준가가 내렸으면 적중,
+// 보유 구간은 올랐으면 적중 — 신호가 실제로 하락을 걸러줬는지를 그대로 보여준다.
+function taaEvents(t, si, ei) {
+  const ev = [];
+  for (let i = Math.max(si, t.firstValid + 1); i <= ei; i++) {
+    if (t.pos[i] === t.pos[i - 1]) continue;
+    ev.push({ i, date: t.dates[i], buy: t.pos[i], nav: t.nav[i], gap: t.gap[i], slope: t.slope[i] });
+  }
+  ev.forEach((e, k) => {
+    const end = k + 1 < ev.length ? ev[k + 1].i : ei;
+    e.endDate = t.dates[end];
+    e.days = Math.round((new Date(t.dates[end]) - new Date(e.date)) / 86400000);
+    e.move = (t.nav[end] / t.nav[e.i] - 1) * 100;   // 구간 중 기준가 변화
+    e.hit = e.buy ? e.move > 0 : e.move < 0;
+    e.open = k === ev.length - 1;
+  });
+  return ev;
+}
+
+const taaFmt = (v, d) => v == null || !isFinite(v) ? '—' : v.toFixed(d == null ? 2 : d);
+const taaSigned = (v, d) => v == null || !isFinite(v) ? '—'
+  : `<span class="${v >= 0 ? 'positive' : 'negative'}">${v >= 0 ? '+' : ''}${v.toFixed(d == null ? 2 : d)}%</span>`;
+
+function taaBadge(t, i) {
+  const up = t.pos[i];
+  const slopeNeg = t.slope[i] != null && t.slope[i] < 0;
+  if (!up) return '<span class="sig-badge sig-cash">현금</span>';
+  return slopeNeg ? '<span class="sig-badge sig-warn">보유 · 기울기 음전환</span>'
+                  : '<span class="sig-badge sig-hold">보유</span>';
+}
+
+function refreshTaa() {
+  const selected = [];
+  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked')
+    .forEach(cb => selected.push(+cb.dataset.idx));
+
+  const cfg = document.getElementById('taa-config');
+  const statusCard = document.getElementById('taa-status-card');
+  const box = document.getElementById('taa-assets');
+  const empty = document.getElementById('taa-empty');
+
+  Object.values(taaCharts).forEach(c => c && c.destroy());
+  Object.keys(taaCharts).forEach(k => delete taaCharts[k]);
+
+  if (!selected.length) {
+    cfg.style.display = statusCard.style.display = 'none';
+    taaPeriod.hide(); box.innerHTML = ''; empty.style.display = ''; return;
+  }
+  cfg.style.display = ''; empty.style.display = 'none';
+
+  document.getElementById('taa-rule-info').textContent =
+    `${taaState.win}일 이동평균 · ${taaState.cadence === 'month' ? '월말 판정' : '매일 판정'}`
+    + (taaState.slope ? ' · 기울기 필터' : '') + (taaState.buffer ? ` · ±${taaState.buffer}% 밴드` : '');
+
+  // 이동평균은 전체 이력으로 먼저 계산하고, 기간 선택은 그 뒤에 잘라내기만 한다.
+  const built = selected.map(idx => {
+    const s = taaLevels(FUNDS[idx], filterCurrencyState[idx] || 'krw');
+    return s && s.nav.length > taaState.win + 20 ? { idx, t: taaCompute(s, taaState) } : { idx, t: null };
+  });
+  const usable = built.filter(b => b.t);
+
+  if (!usable.length) {
+    statusCard.style.display = 'none'; taaPeriod.hide();
+    box.innerHTML = `<div class="empty">선택한 자산의 이력이 ${taaState.win}일 이동평균을 만들기에 부족합니다.</div>`;
+    return;
+  }
+
+  let lo = null, hi = null;
+  usable.forEach(({ t }) => {
+    const d0 = t.dates[t.firstValid], d1 = t.dates[t.dates.length - 1];
+    if (lo === null || d0 < lo) lo = d0;
+    if (hi === null || d1 > hi) hi = d1;
+  });
+  taaPeriod.setBounds(lo, hi);
+  const range = taaPeriod.range();
+
+  statusCard.style.display = '';
+  box.innerHTML = '';
+
+  const rows = [], pending = [];
+  usable.forEach(({ idx, t }) => {
+    const n = t.dates.length;
+    let si = Math.max(t.firstValid, 0), ei = n - 1;
+    while (si < n && range.start && t.dates[si] < range.start) si++;
+    while (ei > 0 && range.end && t.dates[ei] > range.end) ei--;
+    if (ei - si < 20) return;
+
+    const name = FUNDS[idx].shortName || FUNDS[idx].name;
+    const color = COMPARISON_COLORS[idx % COMPARISON_COLORS.length];
+    const bt = taaBacktest(t, si, ei);
+    const ev = taaEvents(t, si, ei);
+    const last = ev.length ? ev[ev.length - 1] : null;
+    const closed = ev.filter(e => !e.open);
+    const hits = closed.filter(e => e.hit).length;
+
+    rows.push(`<tr><td>${name}</td><td>${taaBadge(t, ei)}</td>
+      <td>${taaFmt(t.nav[ei])}</td><td>${taaFmt(t.ma[ei])}</td>
+      <td>${taaSigned(t.gap[ei])}</td><td>${taaSigned(t.slope[ei], 1)}</td>
+      <td>${last ? `${last.date}<br><span class="row-note">${last.buy ? '매수' : '매도'} · ${last.days}일 경과</span>` : '—'}</td></tr>`);
+
+    const cid = `taa-c-${idx}`;
+    const evRows = ev.slice(-8).reverse().map(e => `<tr>
+      <td>${e.date}</td>
+      <td>${e.buy ? '<span class="sig-badge sig-hold">매수</span>' : '<span class="sig-badge sig-cash">매도</span>'}</td>
+      <td>${taaFmt(e.nav)}</td><td>${taaSigned(e.gap)}</td><td>${taaSigned(e.slope, 1)}</td>
+      <td>${e.days}일${e.open ? ' <span class="row-note">진행 중</span>' : ''}</td>
+      <td>${taaSigned(e.move)}</td>
+      <td>${e.open ? '—' : (e.hit ? '<span class="positive">적중</span>' : '<span class="negative">헛발</span>')}</td>
+    </tr>`).join('');
+
+    box.insertAdjacentHTML('beforeend', `
+    <section class="card taa-asset">
+      <div class="taa-head"><h3>${name}</h3>${taaBadge(t, ei)}
+        <span class="fund-meta" style="margin:0;">${t.dates[si]} ~ ${t.dates[ei]}</span></div>
+      <div class="taa-facts">
+        <div class="taa-fact"><span>기준가</span><b>${taaFmt(t.nav[ei])}</b></div>
+        <div class="taa-fact"><span>${taaState.win}일 이동평균</span><b>${taaFmt(t.ma[ei])}</b></div>
+        <div class="taa-fact"><span>이격도</span><b>${taaSigned(t.gap[ei])}</b></div>
+        <div class="taa-fact"><span>이동평균 기울기(연율)</span><b>${taaSigned(t.slope[ei], 1)}</b></div>
+        <div class="taa-fact"><span>${taaState.win}일 모멘텀</span><b>${taaSigned(ei >= taaState.win ? (t.nav[ei] / t.nav[ei - taaState.win] - 1) * 100 : null)}</b></div>
+        <div class="taa-fact"><span>시장 노출</span><b>${taaFmt(bt.exposure, 0)}%</b></div>
+      </div>
+      <div class="chart-container" style="height:300px;"><canvas id="${cid}"></canvas></div>
+      <p class="hint">붉은 배경 = 규칙상 현금 구간</p>
+      <div class="chart-container" style="height:150px;"><canvas id="${cid}-g"></canvas></div>
+      <p class="hint">이격도(기준가 − 이동평균, %)와 이동평균 기울기(연율 %). 기울기 부호는 ${taaState.win}일 모멘텀 부호와 항상 일치합니다.</p>
+
+      <h4 class="taa-sub">규칙 vs 그냥 보유 (${bt.years.toFixed(1)}년)</h4>
+      <table style="font-size:.8rem;min-width:100%;">
+        <tr><th></th><th>CAGR</th><th>MDD</th><th>거래</th><th>시장 노출</th></tr>
+        <tr><td>추세 규칙</td><td>${taaSigned(bt.taaCagr)}</td><td>${taaSigned(bt.taaMdd, 1)}</td>
+            <td>${bt.trades}회</td><td>${taaFmt(bt.exposure, 0)}%</td></tr>
+        <tr><td>그냥 보유</td><td>${taaSigned(bt.bhCagr)}</td><td>${taaSigned(bt.bhMdd, 1)}</td>
+            <td>—</td><td>100%</td></tr>
+      </table>
+      <p class="hint">보수·세금·펀드 변경 지연은 반영하지 않았습니다. 체결은 신호 다음 거래일 기준가로 가정.</p>
+
+      <h4 class="taa-sub">최근 신호 ${closed.length ? `(종료된 ${closed.length}건 중 ${hits}건 적중 · ${(hits / closed.length * 100).toFixed(0)}%)` : ''}</h4>
+      ${ev.length ? `<table style="font-size:.8rem;min-width:100%;">
+        <tr><th>신호일</th><th>구분</th><th>기준가</th><th>이격도</th><th>기울기</th><th>지속</th><th>구간 등락</th><th>결과</th></tr>
+        ${evRows}</table>` : '<p class="fund-meta">이 기간에 신호 전환이 없습니다.</p>'}
+    </section>`);
+
+    pending.push({ cid, t, si, ei, color });
+  });
+
+  document.getElementById('taa-status').innerHTML = rows.length ? `
+    <table style="font-size:.82rem;min-width:100%;">
+      <tr><th>자산</th><th>상태</th><th>기준가</th><th>이동평균</th><th>이격도</th><th>기울기(연율)</th><th>마지막 신호</th></tr>
+      ${rows.join('')}
+    </table>` : '<p class="fund-meta">선택 기간에 신호를 만들 데이터가 없습니다.</p>';
+
+  pending.forEach(p => taaDrawCharts(p));
+}
+
+function taaDrawCharts({ cid, t, si, ei, color }) {
+  const step = Math.max(1, Math.floor((ei - si + 1) / 700));
+  const keep = [];
+  for (let i = si; i <= ei; i += step) keep.push(i);
+  if (keep[keep.length - 1] !== ei) keep.push(ei);
+  const labels = keep.map(i => t.dates[i]);
+
+  // 배경 밴드는 다운샘플 전 원본에서 뽑는다 — 짧은 현금 구간이 통째로 사라지지 않도록.
+  const bands = [];
+  let open = null;
+  for (let i = si; i <= ei; i++) {
+    if (!t.pos[i] && open === null) open = t.dates[i];
+    if (t.pos[i] && open !== null) { bands.push([open, t.dates[i]]); open = null; }
+  }
+  if (open !== null) bands.push([open, t.dates[ei]]);
+
+  const spanDays = (new Date(t.dates[ei]) - new Date(t.dates[si])) / 86400000;
+  const unit = spanDays > 1500 ? 'year' : spanDays > 400 ? 'quarter' : spanDays > 120 ? 'month' : 'week';
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#888';
+
+  taaCharts[cid] = new Chart(document.getElementById(cid), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '기준가', data: keep.map(i => +t.nav[i].toFixed(2)), borderColor: color,
+          fill: false, pointRadius: 0, borderWidth: 1.6 },
+        { label: `${taaState.win}일 이동평균`, data: keep.map(i => t.ma[i] == null ? null : +t.ma[i].toFixed(2)),
+          borderColor: muted, borderDash: [6, 4], fill: false, pointRadius: 0, borderWidth: 1.4 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      scales: { x: { type: 'time', time: { unit }, ticks: { maxTicksLimit: 9 } }, y: { beginAtZero: false } },
+      plugins: {
+        taaBands: { bands },
+        legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 11 } } },
+      },
+    },
+  });
+
+  taaCharts[cid + '-g'] = new Chart(document.getElementById(cid + '-g'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '이격도 %', data: keep.map(i => t.gap[i] == null ? null : +t.gap[i].toFixed(2)),
+          borderColor: color, backgroundColor: color + '22', fill: 'origin',
+          pointRadius: 0, borderWidth: 1.2, yAxisID: 'y' },
+        { label: '이동평균 기울기 (연율 %)', data: keep.map(i => t.slope[i] == null ? null : +t.slope[i].toFixed(2)),
+          borderColor: muted, fill: false, pointRadius: 0, borderWidth: 1.2, yAxisID: 'y1' },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { type: 'time', time: { unit }, ticks: { maxTicksLimit: 9 } },
+        y: { position: 'left', grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.55)' : 'rgba(128,128,128,.12)' } },
+        y1: { position: 'right', grid: { display: false } },
+      },
+      plugins: { taaBands: { bands }, legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 10 } } } },
+    },
+  });
+}
+
+const taaPeriod = makePeriodPicker({
+  card: 'taa-period', info: 'taa-period-info', presets: 'taa-period-presets',
+  years: 'taa-period-years', start: 'taa-start', end: 'taa-end',
+  infoLabel: '이동평균이 확정된 전체 기간',
+}, () => refreshTaa());
+
+// 설정 칩. 값이 바뀌면 이동평균부터 전부 다시 계산한다.
+function taaChips(boxId, defs, apply) {
+  const box = document.getElementById(boxId);
+  if (defs) box.innerHTML = defs.map(d =>
+    `<button class="period-chip${d.on ? ' active' : ''}" type="button" data-v="${d.v}">${d.label}</button>`).join('');
+  box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    box.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    apply(b.dataset.v);
+    refreshTaa();
+  }));
+}
+taaChips('taa-win', [100, 150, 200, 250].map(v => ({ v, label: v + '일', on: v === 200 })),
+  v => taaState.win = +v);
+taaChips('taa-cadence', null, v => taaState.cadence = v);
+taaChips('taa-slope', null, v => taaState.slope = v === '1');
+taaChips('taa-buffer', [0, 1, 2, 3].map(v => ({ v, label: v ? `±${v}%` : '없음', on: v === 0 })),
+  v => taaState.buffer = +v);
 
 function toggleFundView(btn) {
   const group = btn.parentElement.dataset.group;
@@ -2833,14 +3302,31 @@ function renderYearlyBreakdown(selections, pf) {
     return `background:${color};`;
   }
 
+  // Split "코리아인덱스(N1M0)" into name + code so the header stays narrow;
+  // fixed layout would otherwise size every column by its longest label.
+  const labels = names.map(n => {
+    const m = n.match(/^\s*(.+?)\s*\(([^()]+)\)\s*$/);
+    return m ? { main: m[1], sub: m[2] } : { main: n, sub: '' };
+  });
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+  // Equal-width asset columns: fixed layout splits the leftover space evenly.
+  const pfSep = 'border-left:3px solid var(--border-strong);';
+  const pfBg = 'background:var(--surface-2);';
+  const cols = `<colgroup><col style="width:84px;">${labels.map(()=>'<col>').join('')}<col style="width:112px;"></colgroup>`;
+
   let header = '<tr><th>연도</th>';
-  names.forEach((n, i) => { header += `<th>${n}<br><span style="font-weight:400;color:var(--subtle);">${(weights[i]*100).toFixed(0)}%</span></th>`; });
-  header += '<th style="border-left:2px solid var(--border);">포트폴리오</th></tr>';
+  labels.forEach((l, i) => {
+    const sub = l.sub ? `${esc(l.sub)} · ` : '';
+    header += `<th title="${esc(names[i])}"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(l.main)}</div>`
+            + `<span style="font-weight:400;color:var(--subtle);">${sub}${(weights[i]*100).toFixed(0)}%</span></th>`;
+  });
+  header += `<th style="${pfSep}${pfBg}">포트폴리오</th></tr>`;
 
   let rows = '';
   for (const year of years) {
     const yd = yearlyData(year);
-    if (!yd) { rows += `<tr><td><b>${year}</b></td>${names.map(()=>'<td>-</td>').join('')}<td style="border-left:2px solid var(--border);">-</td></tr>`; continue; }
+    if (!yd) { rows += `<tr><td><b>${year}</b></td>${labels.map(()=>'<td>-</td>').join('')}<td style="${pfSep}${pfBg}">-</td></tr>`; continue; }
 
     const yearLabel = yd.monthRange ? `${year}<br><span style="font-size:0.6rem;color:var(--subtle);">${yd.monthRange}</span>` : `${year}`;
     let row = `<tr><td><b>${yearLabel}</b></td>`;
@@ -2848,7 +3334,7 @@ function renderYearlyBreakdown(selections, pf) {
       const c = yd.contribs[i];
       row += `<td style="${cellBg(r)}padding:0.3rem 0.4rem;">${r > 0 ? '+' : ''}${r.toFixed(1)}%<br><span style="font-size:0.65rem;opacity:0.6;">${c > 0 ? '+' : ''}${c.toFixed(1)}%p</span></td>`;
     });
-    row += `<td style="border-left:2px solid var(--border);${cellBg(yd.pfReturn)}"><b>${yd.pfReturn > 0 ? '+' : ''}${yd.pfReturn.toFixed(2)}%</b></td>`;
+    row += `<td style="${pfSep}${pfBg}${cellBg(yd.pfReturn)}font-size:0.82rem;font-weight:700;">${yd.pfReturn > 0 ? '+' : ''}${yd.pfReturn.toFixed(2)}%</td>`;
     row += '</tr>';
     rows += row;
   }
@@ -2856,7 +3342,8 @@ function renderYearlyBreakdown(selections, pf) {
   el.innerHTML = `
     <h3>연도별 자산 수익률 및 기여도</h3>
     <div style="overflow-x:auto;">
-    <table style="min-width:100%;font-size:0.75rem;line-height:1.3;">
+    <table style="width:100%;min-width:${140 + labels.length * 110}px;table-layout:fixed;font-size:0.75rem;line-height:1.3;">
+      ${cols}
       ${header}
       ${rows}
     </table>
@@ -2994,6 +3481,11 @@ function clearSelection() {
   document.getElementById('pf-selection-overlay').style.display = 'none';
   document.getElementById('pf-selection-stats').style.display = 'none';
 }
+
+// A resize moves every plot area, which would leave painted bands misaligned — drop them.
+window.addEventListener('resize', () => {
+  document.querySelectorAll('.drag-overlay, .drag-stats').forEach(el => { el.style.display = 'none'; });
+});
 </script>
 </body>
 </html>
