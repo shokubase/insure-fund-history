@@ -690,6 +690,10 @@ HTML_TEMPLATE = """\
       <div class="selector-column"><h4>미국 <span class="col-ccy-toggle" data-col="filter-us" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-us"></div></div>
       <div class="selector-column"><h4>일본 <span class="col-ccy-toggle" data-col="filter-jp" data-modes="orig,krw"></span></h4><div class="filter-chips" id="filter-chips-jp"></div><h4 style="margin-top:1rem;">지수 <span class="col-ccy-toggle" data-col="filter-index" data-modes="orig,krw,jpy"></span></h4><div class="filter-chips" id="filter-chips-index"></div></div>
     </div>
+    <div id="filter-portfolio-col" style="display:none;margin-top:1.1rem;">
+      <h4>저장 포트폴리오 <span class="pf-weight-hint">포트폴리오 분석 탭에서 저장한 조합 · 일별 리밸런싱 · 보수 차감 후</span></h4>
+      <div class="filter-chips" id="filter-chips-portfolio"></div>
+    </div>
   </div>
 
   <div class="asset-filter" id="compare-period" style="display:none;">
@@ -919,6 +923,7 @@ HTML_TEMPLATE = """\
       <p class="hint">NAV 차트에서 드래그하여 구간 분석 (클릭하면 해제)</p>
       <div id="pf-yearly"></div>
       <div id="pf-trailing"></div>
+      <div id="pf-loo"></div>
       <div id="pf-dd-table"></div>
       <div id="pf-ls-table"></div>
       <div id="pf-corr-table"></div>
@@ -930,6 +935,9 @@ HTML_TEMPLATE = """\
 
 <script>
 const FUNDS = %%FUND_JSON%%;
+// Saved portfolios are appended to FUNDS as synthetic assets so the comparison and
+// signal tabs can treat them like any other series (see syncPortfolioAssets).
+const BASE_FUND_COUNT = FUNDS.length;
 const RISK_FREE = %%RISK_FREE_DECIMAL%%;
 const CCY_SYMBOL = { USD: '$', JPY: '¥', KRW: '₩' };
 function ccySym(fund) { return CCY_SYMBOL[fund.currency] || fund.currency; }
@@ -1921,24 +1929,38 @@ function initFundTrailing(prefix, dailyData) {
 
     const avg = returns.reduce((s,v)=>s+v,0)/returns.length;
     const vari = returns.reduce((s,v)=>s+(v-avg)**2,0)/(returns.length-1);
-    const std = Math.sqrt(vari), se = std/Math.sqrt(returns.length);
+    const std = Math.sqrt(vari);
+    // Overlapping daily windows are not independent draws — see the portfolio-side
+    // note in renderTrailingReturns.
+    const spanYears = (new Date(dates[n-1]) - new Date(dates[0])) / (365.25*86400000);
+    const nEff = Math.max(1, spanYears / wy);
+    const se = std/Math.sqrt(nEff);
     const sorted = [...returns].sort((a,b)=>a-b);
-    const median = sorted[Math.floor(sorted.length/2)];
+    const qtl = p => { const t=(sorted.length-1)*p, lo=Math.floor(t), hi=Math.ceil(t);
+                       return sorted[lo] + (sorted[hi]-sorted[lo])*(t-lo); };
+    const median = qtl(0.5);
     const min = sorted[0], max = sorted[sorted.length-1];
-    const winRate = (returns.filter(r=>r>0).length/returns.length*100);
+    const nPos = returns.filter(r=>r>0).length;
+    const winRate = nPos/returns.length*100;
+    const winTxt = nPos === returns.length
+      ? '100.0%' : (Math.floor(winRate*10)/10).toFixed(1) + '%';
 
     const pc = v => v>0?'positive':v<0?'negative':'';
     const fp = (v,s) => (s&&v>0?'+':'')+v.toFixed(2)+'%';
 
     document.getElementById('tr-metrics-'+uid).innerHTML = `
-      <div class="metric-card"><div class="label">관측수</div><div class="value">${returns.length}</div></div>
+      <div class="metric-card"><div class="label">관측수<span class="row-note">중첩 창</span></div><div class="value">${returns.length}</div></div>
       <div class="metric-card"><div class="label">평균 CAGR</div><div class="value ${pc(avg)}">${fp(avg,1)}</div></div>
       <div class="metric-card"><div class="label">중앙값</div><div class="value ${pc(median)}">${fp(median,1)}</div></div>
       <div class="metric-card"><div class="label">표준편차</div><div class="value">${std.toFixed(2)}%</div></div>
-      <div class="metric-card"><div class="label">표준오차</div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">표준오차<span class="row-note">비중첩 ${nEff.toFixed(1)}개 기준</span></div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate>50?'positive':'negative'}">${winTxt}</div></div>
       <div class="metric-card"><div class="label">최소</div><div class="value ${pc(min)}">${fp(min,1)}</div></div>
       <div class="metric-card"><div class="label">최대</div><div class="value ${pc(max)}">${fp(max,1)}</div></div>
-      <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate>50?'positive':'negative'}">${winRate.toFixed(1)}%</div></div>`;
+      <div class="metric-card"><div class="label">하위 10%</div><div class="value ${pc(qtl(0.10))}">${fp(qtl(0.10),1)}</div></div>
+      <div class="metric-card"><div class="label">하위 25%</div><div class="value ${pc(qtl(0.25))}">${fp(qtl(0.25),1)}</div></div>
+      <div class="metric-card"><div class="label">상위 25%</div><div class="value ${pc(qtl(0.75))}">${fp(qtl(0.75),1)}</div></div>
+      <div class="metric-card"><div class="label">상위 10%</div><div class="value ${pc(qtl(0.90))}">${fp(qtl(0.90),1)}</div></div>`;
 
     const step = Math.max(1, Math.floor(rDates.length/400));
     const cd = rDates.filter((_,i)=>i%step===0), cr = returns.filter((_,i)=>i%step===0);
@@ -3210,25 +3232,39 @@ function renderTrailingReturns(dates, nav) {
     const avg = returns.reduce((s,v) => s+v, 0) / returns.length;
     const variance = returns.reduce((s,v) => s + (v-avg)**2, 0) / (returns.length - 1);
     const std = Math.sqrt(variance);
-    const se = std / Math.sqrt(returns.length);
-    const min = Math.min(...returns);
-    const max = Math.max(...returns);
-    const median = [...returns].sort((a,b) => a-b)[Math.floor(returns.length / 2)];
+    // Daily windows overlap almost entirely, so returns.length is nowhere near the
+    // independent sample — only span/window non-overlapping windows exist. Dividing
+    // by returns.length made a 22-year record look accurate to ±0.04%p.
+    const nEff = Math.max(1, totalYears / windowYears);
+    const se = std / Math.sqrt(nEff);
+    const sorted = [...returns].sort((a,b) => a-b);
+    const qtl = p => { const t = (sorted.length - 1) * p, lo = Math.floor(t), hi = Math.ceil(t);
+                       return sorted[lo] + (sorted[hi] - sorted[lo]) * (t - lo); };
+    const min = sorted[0], max = sorted[sorted.length - 1];
+    const median = qtl(0.5);
     const positive = returns.filter(r => r > 0).length;
-    const winRate = (positive / returns.length * 100);
+    const winRate = positive / returns.length * 100;
+    // Rounding 99.98% up to "100.0%" reads as "never lost money", so only an
+    // unbroken record earns that label — everything else truncates.
+    const winTxt = positive === returns.length
+      ? '100.0%' : (Math.floor(winRate * 10) / 10).toFixed(1) + '%';
 
     const pctCls = v => v > 0 ? 'positive' : v < 0 ? 'negative' : '';
     const fmtPct = (v, sign) => (sign && v > 0 ? '+' : '') + v.toFixed(2) + '%';
 
     document.getElementById('trailing-metrics').innerHTML = `
-      <div class="metric-card"><div class="label">관측수</div><div class="value">${returns.length}</div></div>
+      <div class="metric-card"><div class="label">관측수<span class="row-note">중첩 창</span></div><div class="value">${returns.length}</div></div>
       <div class="metric-card"><div class="label">평균 CAGR</div><div class="value ${pctCls(avg)}">${fmtPct(avg, true)}</div></div>
       <div class="metric-card"><div class="label">중앙값</div><div class="value ${pctCls(median)}">${fmtPct(median, true)}</div></div>
       <div class="metric-card"><div class="label">표준편차</div><div class="value">${std.toFixed(2)}%</div></div>
-      <div class="metric-card"><div class="label">표준오차</div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">표준오차<span class="row-note">비중첩 ${nEff.toFixed(1)}개 기준</span></div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate > 50 ? 'positive' : 'negative'}">${winTxt}</div></div>
       <div class="metric-card"><div class="label">최소</div><div class="value ${pctCls(min)}">${fmtPct(min, true)}</div></div>
       <div class="metric-card"><div class="label">최대</div><div class="value ${pctCls(max)}">${fmtPct(max, true)}</div></div>
-      <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate > 50 ? 'positive' : 'negative'}">${winRate.toFixed(1)}%</div></div>`;
+      <div class="metric-card"><div class="label">하위 10%</div><div class="value ${pctCls(qtl(0.10))}">${fmtPct(qtl(0.10), true)}</div></div>
+      <div class="metric-card"><div class="label">하위 25%</div><div class="value ${pctCls(qtl(0.25))}">${fmtPct(qtl(0.25), true)}</div></div>
+      <div class="metric-card"><div class="label">상위 25%</div><div class="value ${pctCls(qtl(0.75))}">${fmtPct(qtl(0.75), true)}</div></div>
+      <div class="metric-card"><div class="label">상위 10%</div><div class="value ${pctCls(qtl(0.90))}">${fmtPct(qtl(0.90), true)}</div></div>`;
 
     // Chart: rolling return over time
     const step = Math.max(1, Math.floor(rDates.length / 400));
@@ -3267,6 +3303,96 @@ function renderTrailingReturns(dates, nav) {
   });
 
   showRolling(1); // default
+}
+
+// ── Leave-one-out: is this diversification, or one asset carrying everything? ──
+function rollingCagrSeries(dates, nav, wy) {
+  const out = [];
+  for (let i = 0; i < dates.length; i++) {
+    const ed = new Date(dates[i]);
+    ed.setFullYear(ed.getFullYear() + wy);
+    const es = ed.toISOString().slice(0, 10);
+    let ei = -1;
+    for (let j = i + 1; j < dates.length; j++) { if (dates[j] >= es) { ei = j; break; } }
+    if (ei < 0) break;
+    out.push((Math.pow(nav[ei] / nav[i], 1 / wy) - 1) * 100);
+  }
+  return out;
+}
+
+// Dropping the latest-starting asset widens the common date range, which would mix a
+// period change into what is supposed to be a composition change. Every variant is
+// clipped back to the baseline's range and rebased before it is measured.
+function clipToRange(pf, from, to) {
+  const idx = [];
+  pf.dates.forEach((d, i) => { if (d >= from && d <= to) idx.push(i); });
+  if (idx.length < 2) return null;
+  const base = pf.nav[idx[0]];
+  return { dates: idx.map(i => pf.dates[i]), nav: idx.map(i => pf.nav[i] / base * 1000) };
+}
+
+function renderLeaveOneOut(selections) {
+  const el = document.getElementById('pf-loo');
+  if (!el) return;
+  if (selections.length < 2) { el.innerHTML = ''; return; }
+
+  const base = buildPortfolio(selections);
+  if (!base) { el.innerHTML = ''; return; }
+  const from = base.dates[0], to = base.dates[base.dates.length - 1];
+  const wy = Math.min(5, Math.floor((new Date(to) - new Date(from)) / (365.25 * 86400000)));
+  if (wy < 1) { el.innerHTML = ''; return; }
+
+  const stat = p => {
+    const m = calcMetrics(p.dates, p.nav);
+    if (!m) return null;
+    const r = rollingCagrSeries(p.dates, p.nav, wy);
+    return { cagr: +m.cagr, mdd: +m.mdd, rmin: r.length ? Math.min(...r) : null };
+  };
+  const b = stat(base);
+  if (!b) { el.innerHTML = ''; return; }
+
+  const rows = selections.map((s, i) => {
+    const rest = selections.filter((_, k) => k !== i);
+    const w = rest.reduce((t, x) => t + x.weight, 0);
+    if (w <= 0) return null;
+    const pf = buildPortfolio(rest.map(x => ({ ...x, weight: x.weight / w })));
+    if (!pf) return null;
+    const clipped = clipToRange(pf, from, to);
+    if (!clipped) return null;
+    const st = stat(clipped);
+    return st && { name: FUNDS[s.idx].shortName || FUNDS[s.idx].name, weight: s.weight, ...st };
+  }).filter(Boolean);
+  if (rows.length === 0) { el.innerHTML = ''; return; }
+
+  const cls = v => v > 0 ? 'positive' : v < 0 ? 'negative' : '';
+  const dt = v => (v > 0 ? '+' : '') + v.toFixed(2) + '%p';
+  const worst = Math.max(...rows.map(r => Math.abs(r.cagr - b.cagr)));
+
+  el.innerHTML = `
+    <h3>Leave-One-Out</h3>
+    <p class="fund-meta" style="margin:0 0 .6rem;">자산을 하나씩 빼고 남은 비중을 정규화해
+      <b>${from} ~ ${to}</b> 같은 구간에서 다시 측정합니다. 하나를 뺐다고 결과가 무너진다면
+      그건 분산이 아니라 그 자산에 대한 베팅입니다.</p>
+    <table>
+      <thead><tr><th>제외 자산</th><th>비중</th><th>CAGR</th><th>Δ</th>
+        <th>${wy}Y 최저</th><th>Δ</th><th>MDD</th><th>Δ</th></tr></thead>
+      <tbody>
+        <tr><td><b>제외 없음</b></td><td>-</td><td><b>${b.cagr.toFixed(2)}%</b></td><td>-</td>
+          <td><b>${b.rmin === null ? '-' : b.rmin.toFixed(2) + '%'}</b></td><td>-</td>
+          <td><b>${b.mdd.toFixed(2)}%</b></td><td>-</td></tr>
+        ${rows.map(r => `
+        <tr><td>${r.name}</td><td>${(r.weight * 100).toFixed(0)}%</td>
+          <td>${r.cagr.toFixed(2)}%</td>
+          <td class="${cls(r.cagr - b.cagr)}">${dt(r.cagr - b.cagr)}</td>
+          <td>${r.rmin === null ? '-' : r.rmin.toFixed(2) + '%'}</td>
+          <td class="${r.rmin === null || b.rmin === null ? '' : cls(r.rmin - b.rmin)}">${
+            r.rmin === null || b.rmin === null ? '-' : dt(r.rmin - b.rmin)}</td>
+          <td>${r.mdd.toFixed(2)}%</td>
+          <td class="${cls(r.mdd - b.mdd)}">${dt(r.mdd - b.mdd)}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <p class="hint">가장 큰 CAGR 변화 ${worst.toFixed(2)}%p. Δ는 제외했을 때의 변화라
+      음수면 그 자산이 기여하고 있었다는 뜻입니다.</p>`;
 }
 
 // Render portfolio results
@@ -3718,6 +3844,7 @@ function runPortfolioAnalysis() {
   warn.style.display = 'none';
   renderPortfolio(pf);
   renderYearlyBreakdown(sel, pf);
+  renderLeaveOneOut(sel);
   renderCorrelation(sel);
   clearSelection();
 }
