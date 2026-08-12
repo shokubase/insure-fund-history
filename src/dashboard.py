@@ -518,6 +518,9 @@ HTML_TEMPLATE = """\
                         box-shadow: var(--shadow-xs); }
   .period-info { font-size: .78rem; color: var(--subtle); font-variant-numeric: tabular-nums; }
   .row-note { display: block; font-size: .68rem; color: var(--subtle); font-weight: 400; }
+  .track-note { font-size: .78rem; color: var(--subtle); margin: -.4rem 0 1rem; }
+  .track-ok { color: var(--green); font-weight: 600; }
+  .track-bad { color: var(--red); font-weight: 600; }
   /* Inline variant — the portfolio picker lives inside the composition card. */
   .period-block { margin: 0 0 1rem; padding: .8rem 1rem .9rem; background: var(--surface-2);
                   border: 1px solid var(--border); border-radius: var(--radius-sm); }
@@ -672,7 +675,17 @@ HTML_TEMPLATE = """\
   </div>
 
   <section class="card" id="comparison-section" style="display:none;">
-    <h2>성과 비교</h2>
+    <div class="card-head">
+      <h2>성과 비교</h2>
+      <div class="period-row" style="margin:0;">
+        <span class="period-label" style="width:auto;">보수</span>
+        <div class="filter-chips" id="fee-mode">
+          <button class="period-chip active" type="button" data-fee="net">차감 후</button>
+          <button class="period-chip" type="button" data-fee="gross">차감 전</button>
+          <button class="period-chip" type="button" data-fee="both">둘 다</button>
+        </div>
+      </div>
+    </div>
     <p class="fund-meta" id="comparison-meta"></p>
     <div class="chart-container" style="height:400px;position:relative;">
       <canvas id="comparison-chart"></canvas>
@@ -681,6 +694,7 @@ HTML_TEMPLATE = """\
     </div>
     <p class="hint">차트에서 드래그하여 구간 비교</p>
     <div id="comparison-summary"></div>
+    <div id="comparison-tracking"></div>
   </section>
 
   <div class="empty" id="compare-empty">비교할 자산을 2개 이상 선택하세요.</div>
@@ -773,6 +787,7 @@ HTML_TEMPLATE = """\
     </div>
     <div class="empty" id="pf-period-warn" style="display:none;padding:1.6rem 1.25rem;"></div>
     <div id="portfolio-results" style="display:none">
+      <p class="track-note" id="pf-lag-note" style="display:none;"></p>
       <div class="metrics-grid" id="pf-metrics"></div>
       <div class="chart-row">
         <div class="chart-container" style="position:relative;">
@@ -1059,6 +1074,22 @@ const COMPARISON_COLORS = [
   '#15803d','#9333ea','#ea580c','#0891b2','#4f46e5',  // forest green, purple, deep orange, dark cyan, dark indigo
   '#ca8a04','#e11d48','#2dd4bf',                       // gold, crimson, aqua
 ];
+// Compound each asset over ITS OWN dates, then read the result on a shared grid.
+// Intersecting dates first and summing only the common days silently throws away the
+// returns of any asset that quotes on days the others don't — the insurance funds price
+// every calendar day while ETFs price only on trading days, so the funds were losing
+// every weekend accrual (N1M0 read 8.03%/yr against a true 12.46%/yr).
+function segmentReturns(daily, dates) {
+  const src = daily.dates, ret = daily.returns;
+  let j = 0;
+  while (j < src.length && src[j] < dates[0]) j++;
+  return dates.map(d => {
+    let f = 1;
+    while (j < src.length && src[j] <= d) { f *= (1 + ret[j]); j++; }
+    return f - 1;
+  });
+}
+
 let comparisonChart = null;
 let compFullDates = [], compFullNavs = [], compSelectedIdxs = [];
 
@@ -1238,13 +1269,9 @@ function updateComparison() {
 
   // Build NAV series normalized to 100 at start
   const datasets = selected.map((idx, si) => {
-    const lookup = {};
-    dailySets[si].dates.forEach((d, i) => { lookup[d] = dailySets[si].returns[i]; });
     const nav = [100];
-    for (let i = 0; i < common.length; i++) {
-      nav.push(nav[nav.length - 1] * (1 + (lookup[common[i]] || 0)));
-    }
     // nav has length common.length+1, dates need synthetic first date
+    segmentReturns(dailySets[si], common).forEach(r => nav.push(nav[nav.length - 1] * (1 + r)));
     return nav;
   });
 
@@ -1252,34 +1279,51 @@ function updateComparison() {
   firstDate.setDate(firstDate.getDate() - 1);
   const chartDates = [firstDate.toISOString().slice(0, 10), ...common];
 
+  // Add the fee back on to recover what the underlying holdings actually returned.
+  const grossSets = selected.map((idx, si) => addBackFee(datasets[si], chartDates, FUNDS[idx].fee));
+  const showNavs = feeMode === 'gross'
+    ? datasets.map((nav, si) => grossSets[si] || nav)
+    : datasets;
+
   // Downsample
   const step = Math.max(1, Math.floor(chartDates.length / 600));
   const dsDates = chartDates.filter((_, i) => i % step === 0);
 
   // Store full data for drag-select
   compFullDates = chartDates;
-  compFullNavs = datasets;
+  compFullNavs = showNavs;
   compSelectedIdxs = selected;
 
+  const feeLabel = { net: '보수 차감 후', gross: '보수 차감 전', both: '보수 차감 전후' }[feeMode];
   document.getElementById('comparison-meta').textContent =
     `${compPeriod.narrowed() ? '선택 기간' : '공통 기간'}: ${common[0]} ~ ${common[common.length-1]}` +
-    ` (${common.length}거래일) | 시작점 = 100으로 정규화`;
+    ` (${common.length}거래일) | 시작점 = 100으로 정규화 | ${feeLabel}`;
 
   // A one-year range on a 'year' axis draws a single tick — scale the unit to the span.
   const spanDays = (new Date(chartDates[chartDates.length-1]) - new Date(chartDates[0])) / 86400000;
   const timeUnit = spanDays > 1500 ? 'year' : spanDays > 400 ? 'quarter'
                  : spanDays > 120 ? 'month' : spanDays > 35 ? 'week' : 'day';
 
-  const chartDatasets = selected.map((idx, si) => {
-    const dsNav = datasets[si].filter((_, i) => i % step === 0);
-    return {
-      label: FUNDS[idx].shortName || FUNDS[idx].name,
-      data: dsNav.map(v => +v.toFixed(2)),
-      borderColor: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
-      backgroundColor: 'transparent',
-      fill: false, pointRadius: 0, borderWidth: 1.8,
-    };
-  });
+  const chartDatasets = selected.map((idx, si) => ({
+    label: (FUNDS[idx].shortName || FUNDS[idx].name) + (feeMode === 'gross' && grossSets[si] ? ' (보수 전)' : ''),
+    data: showNavs[si].filter((_, i) => i % step === 0).map(v => +v.toFixed(2)),
+    borderColor: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
+    backgroundColor: 'transparent',
+    fill: false, pointRadius: 0, borderWidth: 1.8,
+  }));
+  // "둘 다": the fee-free twin rides above its own fund in the same colour, dashed.
+  if (feeMode === 'both') {
+    selected.forEach((idx, si) => {
+      if (!grossSets[si]) return;
+      chartDatasets.push({
+        label: (FUNDS[idx].shortName || FUNDS[idx].name) + ' (보수 전)',
+        data: grossSets[si].filter((_, i) => i % step === 0).map(v => +v.toFixed(2)),
+        borderColor: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
+        backgroundColor: 'transparent', borderDash: [5, 4],
+        fill: false, pointRadius: 0, borderWidth: 1.4,
+      });
+    });
+  }
 
   if (comparisonChart) comparisonChart.destroy();
   comparisonChart = new Chart(document.getElementById('comparison-chart'), {
@@ -1296,7 +1340,8 @@ function updateComparison() {
   });
 
   // Render summary table
-  renderComparisonSummary(selected, chartDates, datasets);
+  renderComparisonSummary(selected, chartDates, showNavs);
+  renderTrackingSummary(selected, chartDates, datasets, grossSets);
 }
 
 function renderComparisonSummary(selected, dates, navSets) {
@@ -1380,6 +1425,12 @@ function renderComparisonSummary(selected, dates, navSets) {
   rows += '<tr><td>데이터 시작</td>';
   metrics.forEach(m => { rows += `<td>${m.firstDate}</td>`; });
   rows += '</tr>';
+  // Row: 총보수 — blank for benchmarks, which have no wrapper
+  if (metrics.some(m => FUNDS[m.idx].fee)) {
+    rows += '<tr><td>총보수<span class="row-note">연, 기준가에 반영됨</span></td>';
+    metrics.forEach(m => { rows += `<td>${FUNDS[m.idx].fee ? FUNDS[m.idx].fee.toFixed(2) + '%' : '—'}</td>`; });
+    rows += '</tr>';
+  }
   // Row: total return over the selected window
   rows += `<tr><td>총 수익률<span class="row-note">${dates[0]} → ${dates[n-1]}</span></td>`;
   metrics.forEach(m => { rows += `<td class="${pc(m.totalReturn)}">${fp(m.totalReturn, true)}</td>`; });
@@ -1455,6 +1506,120 @@ function renderComparisonSummary(selected, dates, navSets) {
     </table>
     </div>
     ${corrHtml}`;
+}
+
+// ── Fees and index tracking ──
+// The published 기준가 is already net of the wrapper + underlying fee, so adding the fee
+// back reconstructs what the holdings themselves returned. Comparing THAT against the
+// tracked index isolates the manager's tracking from the cost of the wrapper.
+let feeMode = 'net';   // 'net' | 'gross' | 'both'
+
+const MS_PER_YEAR = 365 * 86400000;
+
+// Returns null for anything without a fee on file (benchmarks, N9K0).
+function addBackFee(nav, dates, feePct) {
+  if (!feePct) return null;
+  const t0 = new Date(dates[0]).getTime();
+  return nav.map((v, i) =>
+    v * Math.pow(1 + feePct / 100, (new Date(dates[i]).getTime() - t0) / MS_PER_YEAR));
+}
+
+// Benchmarks carry their ticker in shortName (see render_html).
+function benchIdx(code) {
+  return FUNDS.findIndex(f => f.isBench && f.shortName === code);
+}
+
+(function () {
+  document.querySelectorAll('#fee-mode .period-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      feeMode = btn.dataset.fee;
+      document.querySelectorAll('#fee-mode .period-chip')
+        .forEach(b => b.classList.toggle('active', b === btn));
+      updateComparison();
+    });
+  });
+})();
+
+// Fund vs the index it tracks, over the selected window.
+function renderTrackingSummary(selected, dates, netNavs, grossSets) {
+  const el = document.getElementById('comparison-tracking');
+  const n = dates.length;
+  const years = (new Date(dates[n - 1]) - new Date(dates[0])) / MS_PER_YEAR;
+  const pos = selected.reduce((m, idx, si) => (m[idx] = si, m), {});
+
+  const pairs = [];
+  const missing = [];
+  selected.forEach((idx, si) => {
+    const code = FUNDS[idx].bench;
+    if (!code) return;
+    const bi = benchIdx(code);
+    if (bi < 0) return;
+    if (!(bi in pos)) { missing.push({ fund: compactLabel(FUNDS[idx]), code }); return; }
+    pairs.push({ idx, si, code, bsi: pos[bi], bidx: bi });
+  });
+
+  if (pairs.length === 0) {
+    el.innerHTML = missing.length === 0 ? '' :
+      `<h3>지수 추적</h3><p class="track-note">` +
+      missing.map(m => `<b>${m.fund}</b>의 추적 지수 <b>${m.code}</b>`).join(', ') +
+      `를 함께 선택하면 추적 비교가 표시됩니다.</p>`;
+    return;
+  }
+
+  const ret = nav => (nav[n - 1] / nav[0] - 1) * 100;
+  const ann = nav => (Math.pow(nav[n - 1] / nav[0], 1 / years) - 1) * 100;
+  // Under a year an annualised gap is mostly noise, so compare cumulative instead.
+  const annualisable = years >= 350 / 365;
+  const f = (v, s) => (s && v > 0 ? '+' : '') + v.toFixed(2) + '%';
+  const cls = v => v > 0 ? 'positive' : v < 0 ? 'negative' : '';
+
+  const rows = pairs.map(p => {
+    const net = netNavs[p.si], gross = grossSets[p.si] || netNavs[p.si], bench = netNavs[p.bsi];
+    const m = annualisable ? ann : ret;
+    const gapGross = m(gross) - m(bench);
+    const gapNet = m(net) - m(bench);
+    // Tracking is judged on the fee-free series: that is the part the manager controls.
+    const verdict = Math.abs(gapGross) <= (annualisable ? 1 : 1.5) ? 'track-ok'
+                  : Math.abs(gapGross) <= (annualisable ? 3 : 4.5) ? '' : 'track-bad';
+    // A price-only index understates its own holdings by the dividend yield, so a fund
+    // tracking it should sit ABOVE the line — the gap is not a tracking failure.
+    const po = FUNDS[p.bidx].priceOnly;
+    return `<tr>
+      <td>${compactLabel(FUNDS[p.idx])}</td>
+      <td>${FUNDS[p.bidx].shortName}${po ? '<span class="row-note">배당 미포함 지수</span>' : ''}</td>
+      <td>${FUNDS[p.idx].fee ? FUNDS[p.idx].fee.toFixed(2) + '%' : '—'}</td>
+      <td class="${cls(m(net))}">${f(m(net), true)}</td>
+      <td class="${cls(m(gross))}">${f(m(gross), true)}</td>
+      <td class="${cls(m(bench))}">${f(m(bench), true)}</td>
+      <td class="${po ? '' : verdict}">${f(gapGross, true)}${po ? ' *' : ''}</td>
+      <td class="${cls(gapNet)}">${f(gapNet, true)}</td>
+    </tr>`;
+  }).join('');
+
+  const basis = annualisable ? '연환산' : `누적 (${(years * 12).toFixed(0)}개월)`;
+  let hint = missing.length === 0 ? '' :
+    `<p class="track-note">` + missing.map(m => `<b>${m.fund}</b> → <b>${m.code}</b>`).join(', ') +
+    `도 함께 선택하면 추가로 표시됩니다.</p>`;
+  if (pairs.some(p => FUNDS[p.bidx].priceOnly)) {
+    hint = `<p class="track-note">* 배당이 빠진 가격지수라 배당수익률만큼 펀드가 앞서는 것이 정상입니다. ` +
+           `이 행의 추적 차이는 그만큼 과소평가되니 판정 색을 붙이지 않았습니다.</p>` + hint;
+  }
+
+  el.innerHTML = `
+    <h3>지수 추적 (${basis})</h3>
+    <p class="track-note">
+      <b>추적 차이</b> = 보수 전 − 지수. 운용이 지수를 얼마나 따라갔는지로,
+      0에 가까울수록 좋습니다. <b>실현 차이</b> = 보수 후 − 지수. 보수까지 낸 뒤
+      실제로 받은 결과입니다. 통화 변환은 자산별 통화 토글을 따릅니다.
+    </p>
+    <div style="overflow-x:auto;">
+    <table style="font-size:.8rem;min-width:100%;">
+      <tr><th>펀드</th><th>추적 지수</th><th>총보수</th>
+          <th>보수 후</th><th>보수 전</th><th>지수</th>
+          <th>추적 차이</th><th>실현 차이</th></tr>
+      ${rows}
+    </table>
+    </div>${hint}`;
 }
 
 // Drag-select for comparison chart
@@ -2097,18 +2262,14 @@ function buildPortfolio(selections) {
 
   commonDates = pfPeriod.filter(commonDates);
 
-  // Build date→return lookup per fund
-  const lookups = dailySets.map(f => {
-    const m = {};
-    f.dates.forEach((d, i) => { m[d] = f.returns[i]; });
-    return m;
-  });
-
   const dates = commonDates;
   if (dates.length === 0) return null;
-  const returns = dates.map(d => {
+  // Each asset contributes everything it earned since the previous grid date, so funds
+  // that quote on non-trading days keep those returns (see segmentReturns).
+  const segs = dailySets.map(f => segmentReturns(f, dates));
+  const returns = dates.map((d, i) => {
     let r = 0;
-    selections.forEach((s, si) => { r += lookups[si][d] * s.weight; });
+    selections.forEach((s, si) => { r += segs[si][i] * s.weight; });
     return r;
   });
 
@@ -2354,6 +2515,19 @@ let pfFullDates = [], pfFullNav = []; // full (non-downsampled) data for selecti
 function renderPortfolio(pf) {
   const m = calcMetrics(pf.dates, pf.nav);
   if (!m) return;
+
+  // 보험펀드 기준가는 시장보다 하루 늦게 반영된다 (N1M0 vs KS200TR: 동일일 상관 -0.10,
+  // 1일 지연 상관 0.49). 누적 수익률은 멀쩡하지만, 지연된 계열과 지연되지 않은 계열을
+  // 섞으면 일간 분산이 상쇄돼 변동성·샤프가 실제보다 좋게 나온다.
+  const sel = getSelections();
+  const mixesLag = sel.some(x => !FUNDS[x.idx].isBench) && sel.some(x => FUNDS[x.idx].isBench);
+  const lagNote = document.getElementById('pf-lag-note');
+  lagNote.style.display = mixesLag ? '' : 'none';
+  lagNote.innerHTML = mixesLag
+    ? '⚠ 보험펀드 기준가는 시장 종가를 하루 늦게 반영합니다. 보험펀드와 ETF·지수를 함께 담으면 ' +
+      '일간 수익률의 시점이 어긋나 <b>변동성·샤프비율이 실제보다 좋게</b> 나옵니다 ' +
+      '(분산 효과처럼 보이는 착시). 총 수익률·CAGR·연도별 수익률은 영향받지 않습니다.'
+    : '';
 
   const events = findDrawdowns(pf.dates, pf.nav, 5);
   const lsDca = [3, 12, 36].map(w => calcLsDca(pf.nav, pf.dates, w)).filter(Boolean);
@@ -2977,6 +3151,12 @@ def render_html(fund_results: list[dict], risk_free: float) -> str:
             "region": f.get("region", ""),
             "currency": f.get("currency_label", "KRW"),
         }
+        if f.get("total_fee") is not None:
+            entry["fee"] = f["total_fee"]
+        if f.get("benchmark"):
+            entry["bench"] = f["benchmark"]
+        if f.get("price_only"):
+            entry["priceOnly"] = True
         if f.get("krw"):
             entry["krw"] = {
                 "chart": f["krw"]["chart"],
@@ -3043,7 +3223,8 @@ def main() -> None:
                 if row.get("fundCd"):
                     benchmarks.append({"memberCd": "BENCH", "fundCd": row["fundCd"],
                                        "name": row.get("name") or row["fundCd"],
-                                       "region": row.get("region", "")})
+                                       "region": row.get("region", ""),
+                                       "priceOnly": (row.get("priceOnly") or "").strip()})
                     ccy = row.get("currency", "").upper()
                     if ccy and ccy != "KRW":
                         fund_currency[row["fundCd"]] = ccy
@@ -3104,6 +3285,16 @@ def main() -> None:
         if result:
             result["currency_label"] = ccy or "KRW"
             result["region"] = f.get("region", "")
+            # Wrapper + underlying fee, already deducted from the published NAV.
+            fee_raw = (f.get("totalFee") or "").strip()
+            if fee_raw:
+                result["total_fee"] = float(fee_raw)
+            bench_raw = (f.get("benchmark") or "").strip()
+            if bench_raw:
+                result["benchmark"] = bench_raw
+            # Indices pay no dividends, so their series is price-only however it is adjusted.
+            if f.get("priceOnly"):
+                result["price_only"] = True
             # Add USD analysis (for KRW assets)
             if usd_nav is not None and len(usd_nav) >= 30:
                 result["has_usd"] = True

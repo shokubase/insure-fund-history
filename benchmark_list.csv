@@ -1,4 +1,4 @@
-ticker,name,fundCd,currency,region
+ticker,name,fundCd,currency,region,priceOnly
 KRW=X,USD/KRW,USDKRW,KRW,us
 GLD,SPDR Gold (GLD),GLD,USD,us
 IEF,iShares 7-10Y Treasury (IEF),IEF,USD,us
@@ -24,5 +24,6 @@ MSGO,MS Global Opportunity (MSGO),MSGO,USD
 1545.T,NEXT FUNDS NASDAQ-100 (1545),1545,JPY
 EWY,iShares MSCI South Korea (EWY),EWY,USD
 EWJ,iShares MSCI Japan (EWJ),EWJ,USD,us
-^KS200,KOSPI 200,KS200,KRW,index
+^KS200,KOSPI 200,KS200,KRW,index,1
 385560.KS,KBSTAR 30Y 국고채 (385560),KR30Y,KRW,index
+069500.KS,KODEX 200 (KS200 TR),KS200TR,KRW,index,
