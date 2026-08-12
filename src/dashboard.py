@@ -2468,6 +2468,20 @@ function taaScoreCard(t, si, ei) {
   const mAvoid = avg(sc.map(x => x.s.avoided).filter(v => v != null));
   const mCapt = avg(sc.map(x => x.s.captured).filter(v => v != null));
 
+  // 1차 필터로 쓸 만한지는 회피율이 아니라 재현율이 정한다. 신호가 안 뜬 이벤트는
+  // 2차 매크로 분석으로도 되살릴 수 없다 — 분석할 대상 자체가 없으므로.
+  const caught = sc.filter(x => x.s.sell !== null);
+  const recall = caught.length / eps.length * 100;
+  // 정밀도: 이 구간의 매도 신호 중 실제 하락 이벤트 안에서 나온 비율.
+  let sells = 0, inside = 0;
+  for (let i = lo + 1; i <= ei; i++) {
+    if (t.pos[i] || !t.pos[i - 1]) continue;
+    sells++;
+    if (eps.some(e => i >= e.peak && i <= e.trough)) inside++;
+  }
+  // 신호가 떴을 때 저점까지 아직 남아 있던 낙폭. 이게 작으면 이미 늦은 신호다.
+  const mRemain = avg(caught.map(x => (t.nav[eps[sc.indexOf(x)].trough] / t.nav[x.s.sell] - 1) * 100));
+
   return head + `<table style="font-size:.8rem;min-width:100%;">
       <tr><th>고점 / 저점</th><th>보유 낙폭</th><th>규칙 낙폭</th><th>회피율</th><th>매도 시점</th>
           <th>반등 참여율</th><th>매수 시점</th></tr>
@@ -2475,7 +2489,17 @@ function taaScoreCard(t, si, ei) {
       <tr><td><b>평균 (${sc.length}건)</b></td><td></td><td></td>
           <td><b>${mAvoid == null ? '—' : taaFmt(mAvoid, 0) + '%'}</b></td><td></td>
           <td><b>${mCapt == null ? '—' : taaFmt(mCapt, 0) + '%'}</b></td><td></td></tr>
-    </table>`;
+    </table>
+    <div class="taa-facts">
+      <div class="taa-fact"><span>재현율 (놓치지 않음)</span><b>${taaFmt(recall, 0)}%
+        <span class="row-note">${caught.length}/${eps.length}건</span></b></div>
+      <div class="taa-fact"><span>정밀도 (헛발 아님)</span><b>${sells ? taaFmt(inside / sells * 100, 0) + '%' : '—'}
+        <span class="row-note">${inside}/${sells}회</span></b></div>
+      <div class="taa-fact"><span>신호 시점에 남은 낙폭</span><b>${taaSigned(mRemain, 1)}</b></div>
+    </div>
+    <p class="hint">재현율은 2차 분석으로 못 올립니다 — 신호가 안 뜬 이벤트는 검토 대상에 아예 안 오릅니다.
+       정밀도가 낮은 건 2차 분석으로 걸러낼 여지가 크다는 뜻이고요.
+       "남은 낙폭"이 클수록 신호 시점이 아직 행동할 수 있는 자리였다는 의미입니다.</p>`;
 }
 
 function refreshTaa() {
