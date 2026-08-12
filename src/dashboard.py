@@ -642,7 +642,7 @@ HTML_TEMPLATE = """\
 <section class="tab-panel active" id="panel-compare">
   <header class="page-head">
     <h1>자산 비교</h1>
-    <p>자산을 2개 이상 선택하면 공통 기간을 100으로 정규화해 성과·위험·상관관계를 비교합니다.</p>
+    <p>자산을 선택하면 시작점을 100으로 정규화해 성과·위험을 봅니다. 2개 이상이면 공통 기간에서 상관관계까지 비교합니다.</p>
   </header>
 
   <div class="asset-filter">
@@ -703,7 +703,7 @@ HTML_TEMPLATE = """\
     <div id="comparison-tracking"></div>
   </section>
 
-  <div class="empty" id="compare-empty">비교할 자산을 2개 이상 선택하세요.</div>
+  <div class="empty" id="compare-empty">자산을 1개 이상 선택하세요.</div>
 </section>
 
 <!-- ══ Tab: 개별 자산 상세 ═════════════════════════════════ -->
@@ -894,7 +894,7 @@ function refreshTabState() {
   const picked = document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').length;
   setBadge('badge-compare', picked);
   setBadge('badge-detail', picked);
-  document.getElementById('compare-empty').style.display = picked >= 2 ? 'none' : '';
+  document.getElementById('compare-empty').style.display = picked >= 1 ? 'none' : '';
   document.getElementById('detail-empty').style.display = picked > 0 ? 'none' : '';
   // Runs after the chip handlers have toggled section visibility and built any new charts.
   refreshDetailPeriod();
@@ -1098,6 +1098,7 @@ function segmentReturns(daily, dates) {
 
 let comparisonChart = null;
 let compFullDates = [], compFullNavs = [], compSelectedIdxs = [];
+let compSelectedCount = 0;
 
 // ── Period picker ──
 // Shared by the comparison and portfolio tabs. Both re-base their series to the range
@@ -1147,7 +1148,7 @@ function makePeriodPicker(ids, onChange) {
   function render(note) {
     const lo = bounds.start, hi = bounds.end;
     el('card').style.display = '';
-    el('info').textContent = `${ids.infoLabel || '전체 공통 기간'} ${lo} ~ ${hi}` + (note || '');
+    el('info').textContent = `${(typeof ids.infoLabel === 'function' ? ids.infoLabel() : ids.infoLabel) || '전체 공통 기간'} ${lo} ~ ${hi}` + (note || '');
 
     startInput.min = endInput.min = lo;
     startInput.max = endInput.max = hi;
@@ -1224,6 +1225,7 @@ function makePeriodPicker(ids, onChange) {
 const compPeriod = makePeriodPicker({
   card: 'compare-period', info: 'comp-period-info', presets: 'comp-period-presets',
   years: 'comp-period-years', start: 'comp-start', end: 'comp-end',
+  infoLabel: () => compSelectedCount === 1 ? '전체 기간' : '전체 공통 기간',
 }, () => updateComparison());
 
 // The portfolio is analysed on demand, so a range edit only re-runs it once asked for.
@@ -1253,7 +1255,7 @@ function updateComparison() {
     empty.style.display = '';
   };
 
-  if (selected.length < 2) { hideSection('비교할 자산을 2개 이상 선택하세요.'); return; }
+  if (selected.length < 1) { hideSection('자산을 1개 이상 선택하세요.'); return; }
 
   // Find common date range (respecting per-asset currency toggle)
   const dailySets = selected.map(idx => {
@@ -1263,8 +1265,13 @@ function updateComparison() {
   const dateSets = dailySets.map(d => new Set(d.dates));
   const commonAll = [...dateSets[0]].filter(d => dateSets.every(ds => ds.has(d))).sort();
 
-  if (commonAll.length < 2) { hideSection('선택한 자산들의 공통 기간이 없습니다. 조합을 바꿔보세요.'); return; }
+  if (commonAll.length < 2) {
+    hideSection(selected.length === 1 ? '선택한 자산의 데이터가 부족합니다.'
+                                     : '선택한 자산들의 공통 기간이 없습니다. 조합을 바꿔보세요.');
+    return;
+  }
 
+  compSelectedCount = selected.length;
   compPeriod.setBounds(commonAll[0], commonAll[commonAll.length - 1]);
 
   const common = compPeriod.filter(commonAll);
@@ -1301,8 +1308,9 @@ function updateComparison() {
   compSelectedIdxs = selected;
 
   const feeLabel = { net: '보수 차감 후', gross: '보수 차감 전', both: '보수 차감 전후' }[feeMode];
+  const spanLabel = compPeriod.narrowed() ? '선택 기간' : selected.length === 1 ? '기간' : '공통 기간';
   document.getElementById('comparison-meta').textContent =
-    `${compPeriod.narrowed() ? '선택 기간' : '공통 기간'}: ${common[0]} ~ ${common[common.length-1]}` +
+    `${spanLabel}: ${common[0]} ~ ${common[common.length-1]}` +
     ` (${common.length}거래일) | 시작점 = 100으로 정규화 | ${feeLabel}`;
 
   // A one-year range on a 'year' axis draws a single tick — scale the unit to the span.
@@ -1352,7 +1360,7 @@ function updateComparison() {
 
 function renderComparisonSummary(selected, dates, navSets) {
   const el = document.getElementById('comparison-summary');
-  if (selected.length < 2) { el.innerHTML = ''; return; }
+  if (selected.length < 1) { el.innerHTML = ''; return; }
   if (dates.length < 30) {
     el.innerHTML = '<p class="fund-meta" style="margin-top:1rem;">선택 기간이 30거래일 미만이라 ' +
                    '요약 지표(CAGR·변동성 등)는 생략했습니다.</p>';
@@ -1468,7 +1476,7 @@ function renderComparisonSummary(selected, dates, navSets) {
 
   // Correlation matrix (separate heatmap table)
   let corrHtml = '';
-  if (commonM.length >= 6) {
+  if (selected.length >= 2 && commonM.length >= 6) {
     const arrays = monthlyData.map(m => commonM.map(d => m.map[d]));
     const means = arrays.map(arr => arr.reduce((s,v)=>s+v,0)/commonM.length);
 
@@ -1508,7 +1516,7 @@ function renderComparisonSummary(selected, dates, navSets) {
   }
 
   el.innerHTML = `
-    <h3>요약 비교 (${compPeriod.narrowed() ? '선택 기간' : '공통 기간'} ${dates[0]} ~ ${dates[n-1]})</h3>
+    <h3>${selected.length === 1 ? '요약' : '요약 비교'} (${compPeriod.narrowed() ? '선택 기간' : selected.length === 1 ? '기간' : '공통 기간'} ${dates[0]} ~ ${dates[n-1]})</h3>
     <div style="overflow-x:auto;">
     <table style="font-size:0.8rem;min-width:100%;">
       ${header}${rows}
