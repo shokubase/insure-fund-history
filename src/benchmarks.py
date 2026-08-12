@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yfinance as yf
 
+from . import ft
 from .storage import get_conn
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,51 @@ def _store_closes(conn, fund_cd: str, closes: dict) -> int:
     )
     conn.commit()
     return len(rows)
+
+
+def fetch_ft_first(conn, ticker: str, fund_cd: str, name: str,
+                   start: str, end: str) -> int:
+    """FT 를 우선 소스로 쓰고, 실패하면 yfinance 로 폴백.
+
+    MSGO 같은 해외 펀드는 yfinance 티커가 없다. ISIN 을 넣으면 조회는 되지만
+    2022-03 이후만 나오므로, 전체 이력이 있는 FT 를 먼저 시도한다.
+    FT 가 막히거나(GitHub Actions IP 차단 등) 응답이 비면 yfinance 로 내려간다.
+    """
+    symbol = ft.FT_SYMBOLS[fund_cd]
+    logger.info("Fetching %s from FT (%s) ...", name, symbol)
+    try:
+        closes = ft.fetch_history(symbol, start, end)
+    except Exception as e:  # 네트워크/파싱 무엇이든 폴백으로 넘긴다
+        logger.warning("FT fetch failed for %s: %s", name, e)
+        closes = {}
+
+    if closes:
+        n = _store_closes(conn, fund_cd, closes)
+        # FT 에 없는 날짜가 기존 데이터로 남아 섞이므로, 병합 결과 기준으로 다시 계산
+        _recompute_change_pct(conn, fund_cd)
+        return n
+
+    logger.warning("FT returned nothing for %s — falling back to yfinance", name)
+    return fetch_and_store(conn, ticker, fund_cd, name, start, end)
+
+
+def _recompute_change_pct(conn, fund_cd: str) -> None:
+    """DB 에 저장된 nav 순서대로 change_pct 를 다시 계산한다."""
+    rows = conn.execute(
+        "SELECT std_ymd, nav FROM fund_nav WHERE member_cd=? AND fund_cd=? ORDER BY std_ymd",
+        (MEMBER_CD, fund_cd),
+    ).fetchall()
+    updates = []
+    prev = None
+    for std_ymd, nav in rows:
+        pct = round((nav / prev - 1) * 100, 4) if prev else None
+        updates.append((pct, MEMBER_CD, fund_cd, std_ymd))
+        prev = nav
+    conn.executemany(
+        "UPDATE fund_nav SET change_pct=? WHERE member_cd=? AND fund_cd=? AND std_ymd=?",
+        updates,
+    )
+    conn.commit()
 
 
 # Chained tickers: use primary, fall back to secondary/tertiary for earlier dates
@@ -200,7 +246,9 @@ def main() -> None:
     for b in benchmarks:
         name = b.get("name") or b["ticker"]
         fund_cd = b["fundCd"]
-        if fund_cd in CHAINED_TICKERS:
+        if fund_cd in ft.FT_SYMBOLS:
+            n = fetch_ft_first(conn, b["ticker"], fund_cd, name, args.start, args.end)
+        elif fund_cd in CHAINED_TICKERS:
             n = fetch_chained(conn, fund_cd, name, args.start, args.end)
         else:
             n = fetch_and_store(conn, b["ticker"], fund_cd, name, args.start, args.end)
