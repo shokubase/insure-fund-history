@@ -605,6 +605,8 @@ HTML_TEMPLATE = """\
   .preset-chip .preset-del { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%);
                              font-size: .72rem; color: var(--subtle); cursor: pointer; line-height: 1; }
   .preset-chip .preset-del:hover { color: var(--red); }
+  /* Saved portfolio whose legs share no common dates — shown, but not selectable. */
+  .chip-dead { opacity: .5; cursor: not-allowed; }
 
   /* ── 추세 신호 ─────────────────────────────────────────── */
   .sig-badge { display: inline-flex; align-items: center; gap: .3rem; padding: .12rem .5rem;
@@ -1011,13 +1013,22 @@ function setBadge(id, n) {
   el.classList.toggle('show', n > 0);
 }
 
+// 자산 비교 chip containers. 'portfolio' holds the saved-portfolio pseudo assets.
+const CHIP_BOXES = ['insurance', 'us', 'jp', 'index', 'portfolio'];
+const CHIP_CHECKED_SEL_REAL = CHIP_BOXES.slice(0, 4).map(k => `#filter-chips-${k} input:checked`).join(', ');
+const CHIP_CHECKED_SEL = CHIP_BOXES.map(k => `#filter-chips-${k} input:checked`).join(', ');
+const CHIP_ALL_SEL = CHIP_BOXES.map(k => `#filter-chips-${k} .filter-chip`).join(', ');
+
 function refreshTabState() {
-  const picked = document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').length;
+  const picked = document.querySelectorAll(CHIP_CHECKED_SEL).length;
+  // 개별 자산 상세 renders one server-side section per real fund, so a saved portfolio
+  // has nothing to show there — leave it out of that badge rather than promise a section.
+  const pickedReal = document.querySelectorAll(CHIP_CHECKED_SEL_REAL).length;
   setBadge('badge-compare', picked);
   setBadge('badge-taa', picked);
-  setBadge('badge-detail', picked);
+  setBadge('badge-detail', pickedReal);
   document.getElementById('compare-empty').style.display = picked >= 1 ? 'none' : '';
-  document.getElementById('detail-empty').style.display = picked > 0 ? 'none' : '';
+  document.getElementById('detail-empty').style.display = pickedReal > 0 ? 'none' : '';
   // Runs after the chip handlers have toggled section visibility and built any new charts.
   refreshDetailPeriod();
   refreshTaa();
@@ -1168,7 +1179,7 @@ FUNDS.forEach((f, i) => { if (f.hasKrw || f.hasJpy) filterCurrencyState[i] = f.c
     filterContainers[fundRegion(fund)].appendChild(chip);
   });
 
-  const allFilterChips = () => document.querySelectorAll('#filter-chips-insurance .filter-chip, #filter-chips-us .filter-chip, #filter-chips-jp .filter-chip, #filter-chips-index .filter-chip');
+  const allFilterChips = () => document.querySelectorAll(CHIP_ALL_SEL);
 
   document.getElementById('filter-all').addEventListener('click', () => {
     allFilterChips().forEach(chip => {
@@ -1218,6 +1229,117 @@ function segmentReturns(daily, dates) {
     while (j < src.length && src[j] <= d) { f *= (1 + ret[j]); j++; }
     return f - 1;
   });
+}
+
+// ── Saved portfolios as synthetic assets ──
+// A preset stores constituents, weights and each leg's currency mode — not a NAV
+// snapshot — so the series is rebuilt from live data on every load and never goes
+// stale as the daily scrape adds days. Weights are held fixed, i.e. daily rebalancing,
+// which is the same assumption the 포트폴리오 분석 tab makes.
+const CCY_MODE_LABEL = { krw: 'KRW', usd: 'USD', jpy: 'JPY' };
+
+function presetSeries(items) {
+  const legs = items.filter(it => FUNDS[it.idx] && it.idx < BASE_FUND_COUNT);
+  if (!legs.length) return null;
+  const sets = legs.map(it => getDataByMode(FUNDS[it.idx], it.ccy || 'orig', 'daily'));
+  if (sets.some(d => !d || !d.dates.length)) return null;
+  const dateSets = sets.map(d => new Set(d.dates));
+  const dates = [...dateSets[0]].filter(d => dateSets.every(s => s.has(d))).sort();
+  if (dates.length < 2) return null;
+
+  // A preset can be saved before the weights add to 100 — renormalise rather than
+  // reporting the returns of a portfolio that is part cash by accident.
+  const wsum = legs.reduce((s, it) => s + it.weight, 0);
+  if (!(wsum > 0)) return null;
+  const segs = sets.map(f => segmentReturns(f, dates));
+  const returns = dates.map((_, i) =>
+    legs.reduce((r, it, si) => r + segs[si][i] * (it.weight / wsum), 0));
+
+  const nav = [1000];
+  returns.forEach(r => nav.push(nav[nav.length - 1] * (1 + r)));
+  const first = new Date(dates[0]);
+  first.setDate(first.getDate() - 1);
+  const navDates = [first.toISOString().slice(0, 10), ...dates];
+
+  // Month-end NAV → monthly returns (the correlation matrix reads this).
+  const lastOfMonth = {};
+  navDates.forEach((d, i) => { lastOfMonth[d.slice(0, 7)] = nav[i]; });
+  const months = Object.keys(lastOfMonth).sort();
+  const mDates = [], mReturns = [];
+  for (let i = 1; i < months.length; i++) {
+    mDates.push(months[i] + '-28');
+    mReturns.push(lastOfMonth[months[i]] / lastOfMonth[months[i - 1]] - 1);
+  }
+
+  const step = Math.max(1, Math.floor(navDates.length / 500));
+  let peak = -Infinity;
+  const dd = nav.map(v => { peak = Math.max(peak, v); return (v - peak) / peak; });
+  const chart = {
+    dates: navDates.filter((_, i) => i % step === 0),
+    nav: nav.filter((_, i) => i % step === 0).map(v => +v.toFixed(2)),
+    drawdown: dd.filter((_, i) => i % step === 0).map(v => +(v * 100).toFixed(2)),
+  };
+
+  // One currency for every leg → quote the portfolio in it; otherwise it is a mix and
+  // there is no single unit to name.
+  const ccys = legs.map(it => CCY_MODE_LABEL[it.ccy] || FUNDS[it.idx].currency || 'KRW');
+  const currency = ccys.every(c => c === ccys[0]) ? ccys[0] : 'MIX';
+
+  return {
+    daily: { dates, returns }, monthly: { dates: mDates, returns: mReturns }, chart,
+    currency,
+    legs: legs.map(it => `${FUNDS[it.idx].shortName || FUNDS[it.idx].name} ${(it.weight / wsum * 100).toFixed(0)}%`),
+  };
+}
+
+// Rebuild the synthetic entries from localStorage and repaint their chips. Safe to call
+// repeatedly: the appended entries are dropped first, so indices of the real funds —
+// which is what a preset stores — never move.
+function syncPortfolioAssets() {
+  const checkedNames = new Set();
+  document.querySelectorAll('#filter-chips-portfolio input:checked')
+    .forEach(cb => checkedNames.add(cb.dataset.pfName));
+
+  FUNDS.length = BASE_FUND_COUNT;
+  const box = document.getElementById('filter-chips-portfolio');
+  box.innerHTML = '';
+
+  const presets = loadPresets();
+  presets.forEach(preset => {
+    const s = presetSeries(preset.items);
+    const chip = document.createElement('label');
+    chip.className = 'filter-chip';
+    if (!s) {
+      chip.classList.add('chip-dead');
+      chip.title = '구성 자산의 공통 기간이 없어 비교할 수 없습니다.';
+      chip.textContent = '⛌ ' + preset.name;
+      box.appendChild(chip);
+      return;
+    }
+    const idx = FUNDS.length;
+    FUNDS.push({
+      name: preset.name, shortName: preset.name,
+      isBench: false, isPortfolio: true, region: 'portfolio',
+      currency: s.currency, daily: s.daily, monthly: s.monthly, chart: s.chart,
+    });
+    // Built through the DOM, not innerHTML — preset names come from a prompt().
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.idx = idx;
+    cb.dataset.pfName = preset.name;
+    chip.append(cb, '▦ ' + preset.name);
+    chip.title = s.legs.join(' · ');
+    if (checkedNames.has(preset.name)) { cb.checked = true; chip.classList.add('active'); }
+    chip.addEventListener('click', () => {
+      setTimeout(() => {
+        chip.classList.toggle('active', chip.querySelector('input').checked);
+        updateComparison();
+      }, 0);
+    });
+    box.appendChild(chip);
+  });
+
+  document.getElementById('filter-portfolio-col').style.display = presets.length ? '' : 'none';
 }
 
 let comparisonChart = null;
@@ -1366,7 +1488,7 @@ function updateComparison() {
   const section = document.getElementById('comparison-section');
   const empty = document.getElementById('compare-empty');
   const selected = [];
-  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked').forEach(cb => {
+  document.querySelectorAll(CHIP_CHECKED_SEL).forEach(cb => {
     selected.push(+cb.dataset.idx);
   });
   refreshTabState();
@@ -2564,7 +2686,7 @@ function taaScoreCard(t, si, ei) {
 
 function refreshTaa() {
   const selected = [];
-  document.querySelectorAll('#filter-chips-insurance input:checked, #filter-chips-us input:checked, #filter-chips-jp input:checked, #filter-chips-index input:checked')
+  document.querySelectorAll(CHIP_CHECKED_SEL)
     .forEach(cb => selected.push(+cb.dataset.idx));
 
   const cfg = document.getElementById('taa-config');
@@ -3797,7 +3919,7 @@ function renderPresetChips() {
         const presets = loadPresets();
         presets.splice(+e.target.dataset.idx, 1);
         savePresets(presets);
-        renderPresetChips();
+        refreshPresetUI();
         return;
       }
       applyPreset(preset);
@@ -3820,10 +3942,19 @@ document.getElementById('btn-save-preset').addEventListener('click', () => {
   if (!name) return;
   presets.push({ name, items: config });
   savePresets(presets);
-  renderPresetChips();
+  refreshPresetUI();
 });
 
+// The saved set drives two surfaces: the recall chips here and the pseudo assets the
+// 자산 비교 / 추세 신호 tabs offer.
+function refreshPresetUI() {
+  renderPresetChips();
+  syncPortfolioAssets();
+  updateComparison();
+}
+
 renderPresetChips();
+syncPortfolioAssets();
 
 // Annualised figures off a handful of days are noise, so refuse the window instead.
 const PF_MIN_DAYS = 30;

@@ -28,7 +28,9 @@
       "Bash(npm:*)",
       "Bash(npx:*)",
       "Bash(rm:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "mcp__playwright",
+      "mcp__Claude_Browser"
     ],
     "ask": [],
     "deny": []
