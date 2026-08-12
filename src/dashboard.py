@@ -2300,19 +2300,36 @@ function taaCompute(series, st) {
     want[i] = ok;
   }
 
+  const firstValid = ma.findIndex(v => v != null);
+
+  // 그날그날의 규칙 판정. 밴드 안쪽(want === null)이면 직전 판정을 그대로 물고 간다.
+  const daily = new Array(n).fill(null);
+  let cur = null;
+  for (let i = firstValid; i < n; i++) {
+    if (want[i] !== null) cur = want[i];
+    if (cur === null) cur = nav[i] > ma[i];   // 밴드 안에서 시작한 경우의 초기값
+    daily[i] = cur;
+  }
+
+  // 그달의 마지막 거래일인가. 마지막 데이터가 실제 월말이 아니면 확정일로 치지 않는다 —
+  // 아직 안 끝난 달의 중간 시세로 신호가 떴다고 표시하면 없는 신호를 만들어내는 셈이다.
+  const isMonthEnd = i => {
+    if (i + 1 < n) return dates[i + 1].slice(0, 7) !== dates[i].slice(0, 7);
+    const d = new Date(dates[i] + 'T00:00:00'), m = d.getMonth();
+    d.setDate(d.getDate() + 1);
+    return d.getMonth() !== m;
+  };
+
   // 판정 주기 적용. 월말 규칙은 그달 마지막 거래일에만 상태를 바꾼다 (Faber 원문의 월말 체크).
   const pos = new Array(n).fill(null);
   let held = null;
-  const firstValid = ma.findIndex(v => v != null);
-  for (let i = 0; i < n; i++) {
-    if (i < firstValid) continue;
-    const monthEnd = i === n - 1 || dates[i + 1].slice(0, 7) !== dates[i].slice(0, 7);
-    const decide = st.cadence === 'day' || held === null || monthEnd;
-    if (decide && want[i] !== null) held = want[i];
-    if (held === null) held = nav[i] > ma[i];   // 밴드 안에서 시작한 경우의 초기값
+  for (let i = firstValid; i < n; i++) {
+    if (held === null || st.cadence === 'day' || isMonthEnd(i)) held = daily[i];
     pos[i] = held;
   }
-  return { dates, nav, ma, gap, slope, pos, firstValid };
+  // 월말 모드에서 이번 달이 아직 안 끝났다면, 오늘 기준 판정은 "잠정"으로만 보여준다.
+  const settled = st.cadence === 'day' || isMonthEnd(n - 1);
+  return { dates, nav, ma, gap, slope, pos, daily, firstValid, settled };
 }
 
 // 실제 매매는 신호 다음 거래일 기준가로 체결된다고 본다 (기준가 반영 지연 T+1).
@@ -2437,9 +2454,17 @@ function refreshTaa() {
     const closed = ev.filter(e => !e.open);
     const hits = closed.filter(e => e.hit).length;
 
+    // 마지막 봉이 곧 오늘일 때만 "잠정 판정"이 의미가 있다. 과거 구간을 잘라 본 경우엔 숨긴다.
+    const live = ei === t.dates.length - 1 && !t.settled;
+    const flips = live && t.daily[ei] !== t.pos[ei];
+    const pendCell = !live ? '<span class="row-note">확정</span>'
+      : flips ? `<span class="sig-badge ${t.daily[ei] ? 'sig-hold' : 'sig-cash'}">${t.daily[ei] ? '매수' : '매도'}로 전환</span>`
+              : '<span class="row-note">유지</span>';
+
     rows.push(`<tr><td>${name}</td><td>${taaBadge(t, ei)}</td>
       <td>${taaFmt(t.nav[ei])}</td><td>${taaFmt(t.ma[ei])}</td>
       <td>${taaSigned(t.gap[ei])}</td><td>${taaSigned(t.slope[ei], 1)}</td>
+      <td>${pendCell}</td>
       <td>${last ? `${last.date}<br><span class="row-note">${last.buy ? '매수' : '매도'} · ${last.days}일 경과</span>` : '—'}</td></tr>`);
 
     const cid = `taa-c-${idx}`;
@@ -2455,6 +2480,7 @@ function refreshTaa() {
     box.insertAdjacentHTML('beforeend', `
     <section class="card taa-asset">
       <div class="taa-head"><h3>${name}</h3>${taaBadge(t, ei)}
+        ${flips ? `<span class="sig-badge ${t.daily[ei] ? 'sig-hold' : 'sig-cash'}">월말 확정 시 ${t.daily[ei] ? '매수' : '매도'}로 전환</span>` : ''}
         <span class="fund-meta" style="margin:0;">${t.dates[si]} ~ ${t.dates[ei]}</span></div>
       <div class="taa-facts">
         <div class="taa-fact"><span>기준가</span><b>${taaFmt(t.nav[ei])}</b></div>
@@ -2490,7 +2516,8 @@ function refreshTaa() {
 
   document.getElementById('taa-status').innerHTML = rows.length ? `
     <table style="font-size:.82rem;min-width:100%;">
-      <tr><th>자산</th><th>상태</th><th>기준가</th><th>이동평균</th><th>이격도</th><th>기울기(연율)</th><th>마지막 신호</th></tr>
+      <tr><th>자산</th><th>확정 상태</th><th>기준가</th><th>이동평균</th><th>이격도</th><th>기울기(연율)</th>
+          <th>이번 달 말 판정</th><th>마지막 신호</th></tr>
       ${rows.join('')}
     </table>` : '<p class="fund-meta">선택 기간에 신호를 만들 데이터가 없습니다.</p>';
 
