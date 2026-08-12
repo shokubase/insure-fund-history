@@ -777,6 +777,11 @@ HTML_TEMPLATE = """\
       <div class="filter-chips" id="taa-buffer"></div>
       <span class="hint" style="margin:0;">이동평균 ±밴드 안쪽은 신호로 보지 않음 (경계 진동 억제)</span>
     </div>
+    <div class="period-row">
+      <span class="period-label">준거점</span>
+      <div class="filter-chips" id="taa-epdepth"></div>
+      <span class="hint" style="margin:0;">이 낙폭 이상인 하락 이벤트를 "정말 팔았어야 했던 때"로 보고 채점</span>
+    </div>
   </div>
 
   <div class="asset-filter" id="taa-period" style="display:none;">
@@ -2236,7 +2241,7 @@ const detailPeriod = makePeriodPicker({
 // 규칙: 기준가 > 이동평균 → 보유, 아니면 현금. 이동평균은 언제나 전체 이력으로 계산하고
 // 표시·백테스트 구간만 잘라낸다 — 구간 시작 200일치를 못 채워 신호가 비는 걸 막기 위해서다.
 
-const taaState = { win: 200, cadence: 'month', slope: true, buffer: 0 };
+const taaState = { win: 200, cadence: 'month', slope: true, buffer: 0, epDepth: -20 };
 const taaCharts = {};
 
 // 매도 구간을 차트 배경에 칠한다. annotation 플러그인을 쓰지 않으려고 직접 그린다.
@@ -2378,6 +2383,51 @@ function taaEvents(t, si, ei) {
   return ev;
 }
 
+// ── 준거점 ──────────────────────────────────────────────────────────
+// "정말 팔았어야 했던 때"를 눈대중으로 고르면 채점이 사후 합리화가 된다. 그래서 규칙과
+// 무관하게 기준가 자체에서 큰 하락 구간(고점→저점→회복)을 뽑아 준거점으로 쓴다.
+// 고점에 팔고 저점에 사는 게 이론적 상한(회피율·참여율 100%)이고, 규칙은 그 대비로 채점된다.
+function taaEpisodes(t, minDepth) {
+  const { nav } = t, n = nav.length, out = [];
+  let peak = nav[0], peakIdx = 0, inDd = false, trIdx = 0, trVal = 0;
+  for (let i = 0; i < n; i++) {
+    if (nav[i] >= peak) {
+      if (inDd && trVal <= minDepth) out.push({ peak: peakIdx, trough: trIdx, end: i, depth: trVal * 100 });
+      inDd = false; peak = nav[i]; peakIdx = i;
+      continue;
+    }
+    const d = (nav[i] - peak) / peak;
+    if (!inDd) { inDd = true; trIdx = i; trVal = d; }
+    else if (d < trVal) { trIdx = i; trVal = d; }
+  }
+  if (inDd && trVal <= minDepth) out.push({ peak: peakIdx, trough: trIdx, end: null, depth: trVal * 100 });
+  return out;
+}
+
+function taaScore(t, ep, ei) {
+  const end = ep.end == null || ep.end > ei ? ei : ep.end;
+  const seg = (a, b, useRule) => {
+    let v = 1;
+    for (let i = a + 1; i <= b; i++) {
+      const r = t.nav[i] / t.nav[i - 1] - 1;
+      v *= 1 + (!useRule || t.pos[i - 1] ? r : 0);
+    }
+    return (v - 1) * 100;
+  };
+  const bhFall = seg(ep.peak, ep.trough, false), ruleFall = seg(ep.peak, ep.trough, true);
+  const bhRise = seg(ep.trough, end, false), ruleRise = seg(ep.trough, end, true);
+  let sell = null, buy = null;
+  for (let i = ep.peak + 1; i <= ep.trough; i++) if (!t.pos[i] && t.pos[i - 1]) { sell = i; break; }
+  for (let i = ep.trough + 1; i <= end; i++) if (t.pos[i] && !t.pos[i - 1]) { buy = i; break; }
+  return {
+    end, bhFall, ruleFall, bhRise, ruleRise, sell, buy,
+    alreadyCash: sell === null && !t.pos[ep.peak],
+    // 회피율: 보유가 잃은 것 중 규칙이 안 잃은 몫. 참여율: 반등 중 규칙이 먹은 몫.
+    avoided: bhFall < 0 ? (1 - ruleFall / bhFall) * 100 : null,
+    captured: bhRise > 0 ? ruleRise / bhRise * 100 : null,
+  };
+}
+
 const taaFmt = (v, d) => v == null || !isFinite(v) ? '—' : v.toFixed(d == null ? 2 : d);
 const taaSigned = (v, d) => v == null || !isFinite(v) ? '—'
   : `<span class="${v >= 0 ? 'positive' : 'negative'}">${v >= 0 ? '+' : ''}${v.toFixed(d == null ? 2 : d)}%</span>`;
@@ -2388,6 +2438,44 @@ function taaBadge(t, i) {
   if (!up) return '<span class="sig-badge sig-cash">현금</span>';
   return slopeNeg ? '<span class="sig-badge sig-warn">보유 · 기울기 음전환</span>'
                   : '<span class="sig-badge sig-hold">보유</span>';
+}
+
+function taaScoreCard(t, si, ei) {
+  const lo = Math.max(si, t.firstValid);
+  const eps = taaEpisodes(t, taaState.epDepth / 100).filter(e => e.peak >= lo && e.trough <= ei);
+  const head = `<h4 class="taa-sub">준거점 채점 — ${Math.abs(taaState.epDepth)}% 이상 하락 이벤트</h4>
+    <p class="hint" style="margin-top:0;">고점에 팔고 저점에 사는 게 상한(회피율·참여율 100%).
+       회피율은 보유가 잃은 낙폭 중 규칙이 피한 몫, 참여율은 반등 중 규칙이 먹은 몫입니다.</p>`;
+  if (!eps.length) return head + `<p class="fund-meta">이 기간에 ${Math.abs(taaState.epDepth)}% 이상 하락 이벤트가 없습니다.</p>`;
+
+  const sc = eps.map(e => ({ e, s: taaScore(t, e, ei) }));
+  const rows = sc.map(({ e, s }) => {
+    const when = (i, ref, label) => i === null
+      ? `<span class="row-note">${label}</span>`
+      : `${t.dates[i]}<br><span class="row-note">${ref >= 0 ? '+' : ''}${Math.round((new Date(t.dates[i]) - new Date(t.dates[ref])) / 86400000)}일</span>`;
+    return `<tr>
+      <td>${t.dates[e.peak]}<br><span class="row-note">저점 ${t.dates[e.trough]}</span></td>
+      <td>${taaSigned(s.bhFall, 1)}</td>
+      <td>${taaSigned(s.ruleFall, 1)}</td>
+      <td><b>${s.avoided == null ? '—' : taaFmt(s.avoided, 0) + '%'}</b></td>
+      <td>${when(s.sell, e.peak, s.alreadyCash ? '이미 현금' : '안 팔았음')}</td>
+      <td>${s.captured == null ? '—' : taaFmt(s.captured, 0) + '%'}</td>
+      <td>${when(s.buy, e.trough, t.pos[e.trough] ? '계속 보유' : '안 샀음')}</td>
+    </tr>`;
+  }).join('');
+
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const mAvoid = avg(sc.map(x => x.s.avoided).filter(v => v != null));
+  const mCapt = avg(sc.map(x => x.s.captured).filter(v => v != null));
+
+  return head + `<table style="font-size:.8rem;min-width:100%;">
+      <tr><th>고점 / 저점</th><th>보유 낙폭</th><th>규칙 낙폭</th><th>회피율</th><th>매도 시점</th>
+          <th>반등 참여율</th><th>매수 시점</th></tr>
+      ${rows}
+      <tr><td><b>평균 (${sc.length}건)</b></td><td></td><td></td>
+          <td><b>${mAvoid == null ? '—' : taaFmt(mAvoid, 0) + '%'}</b></td><td></td>
+          <td><b>${mCapt == null ? '—' : taaFmt(mCapt, 0) + '%'}</b></td><td></td></tr>
+    </table>`;
 }
 
 function refreshTaa() {
@@ -2505,6 +2593,8 @@ function refreshTaa() {
       </table>
       <p class="hint">보수·세금·펀드 변경 지연은 반영하지 않았습니다. 체결은 신호 다음 거래일 기준가로 가정.</p>
 
+      ${taaScoreCard(t, si, ei)}
+
       <h4 class="taa-sub">최근 신호 ${closed.length ? `(종료된 ${closed.length}건 중 ${hits}건 적중 · ${(hits / closed.length * 100).toFixed(0)}%)` : ''}</h4>
       ${ev.length ? `<table style="font-size:.8rem;min-width:100%;">
         <tr><th>신호일</th><th>구분</th><th>기준가</th><th>이격도</th><th>기울기</th><th>지속</th><th>구간 등락</th><th>결과</th></tr>
@@ -2612,6 +2702,8 @@ taaChips('taa-cadence', null, v => taaState.cadence = v);
 taaChips('taa-slope', null, v => taaState.slope = v === '1');
 taaChips('taa-buffer', [0, 1, 2, 3].map(v => ({ v, label: v ? `±${v}%` : '없음', on: v === 0 })),
   v => taaState.buffer = +v);
+taaChips('taa-epdepth', [-10, -15, -20, -30].map(v => ({ v, label: `${v}%`, on: v === -20 })),
+  v => taaState.epDepth = +v);
 
 function toggleFundView(btn) {
   const group = btn.parentElement.dataset.group;
