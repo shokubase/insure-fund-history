@@ -2381,7 +2381,15 @@ function taaEvents(t, si, ei) {
     const end = k + 1 < ev.length ? ev[k + 1].i : ei;
     e.endDate = t.dates[end];
     e.days = Math.round((new Date(t.dates[end]) - new Date(e.date)) / 86400000);
-    e.move = (t.nav[end] / t.nav[e.i] - 1) * 100;   // 구간 중 기준가 변화
+    // 순변화: 다음 신호까지의 기준가 변화. 현금으로 있었던 대가가 실제로 얼마였는지는
+    // 이 값이 정한다 — 중간에 얼마나 빠졌든 되돌아왔으면 아낀 게 아니므로.
+    e.move = (t.nav[end] / t.nav[e.i] - 1) * 100;
+    // 최저점: 구간 안에서 가장 깊었던 지점. 순변화만 보면 2022년처럼 -31% 빠졌다가
+    // 반등해 -16%로 끝난 구간을 "얕은 하락"으로 오해하게 된다.
+    let lo = e.i;
+    for (let j = e.i; j <= end; j++) if (t.nav[j] < t.nav[lo]) lo = j;
+    e.worst = (t.nav[lo] / t.nav[e.i] - 1) * 100;
+    e.worstDate = t.dates[lo];
     e.hit = e.buy ? e.move > 0 : e.move < 0;
     e.open = k === ev.length - 1;
   });
@@ -2615,6 +2623,7 @@ function refreshTaa() {
       <td>${e.buy ? '<span class="sig-badge sig-hold">매수</span>' : '<span class="sig-badge sig-cash">매도</span>'}</td>
       <td>${taaFmt(e.nav)}</td><td>${taaSigned(e.gap)}</td><td>${taaSigned(e.slope, 1)}</td>
       <td>${e.days}일${e.open ? ' <span class="row-note">진행 중</span>' : ''}</td>
+      <td>${taaSigned(e.worst)}${e.worst < -0.05 ? `<br><span class="row-note">${e.worstDate}</span>` : ''}</td>
       <td>${taaSigned(e.move)}</td>
       <td>${e.open ? '—' : (e.hit ? '<span class="positive">적중</span>' : '<span class="negative">헛발</span>')}</td>
     </tr>`).join('');
@@ -2657,8 +2666,13 @@ function refreshTaa() {
 
       <h4 class="taa-sub">최근 신호 ${closed.length ? `(종료된 ${closed.length}건 중 ${hits}건 적중 · ${(hits / closed.length * 100).toFixed(0)}%)` : ''}</h4>
       ${ev.length ? `<table style="font-size:.8rem;min-width:100%;">
-        <tr><th>신호일</th><th>구분</th><th>기준가</th><th>이격도</th><th>기울기</th><th>지속</th><th>구간 등락</th><th>결과</th></tr>
-        ${evRows}</table>` : '<p class="fund-meta">이 기간에 신호 전환이 없습니다.</p>'}
+        <tr><th>신호일</th><th>구분</th><th>기준가</th><th>이격도</th><th>기울기</th><th>지속</th>
+            <th>구간 최저</th><th>다음 신호까지<br>순변화</th><th>결과</th></tr>
+        ${evRows}</table>
+      <p class="hint"><b>구간 최저</b>는 다음 신호가 나기 전 가장 깊었던 지점,
+         <b>순변화</b>는 다음 신호 시점의 값입니다. 둘이 크게 벌어지면 그 사이 빠졌다가 되돌아왔다는 뜻이고,
+         적중·헛발은 순변화로 판정합니다 — 되돌아왔으면 현금으로 있어서 아낀 게 없으므로.</p>`
+      : '<p class="fund-meta">이 기간에 신호 전환이 없습니다.</p>'}
     </section>`);
 
     pending.push({ cid, t, si, ei, color });
