@@ -304,21 +304,25 @@ HTML_TEMPLATE = """\
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <style>
   :root {
-    --bg: #f4f5f8;
-    --card: #ffffff;
-    --surface: #ffffff;
-    --surface-2: #f7f8fa;
-    --surface-3: #edeff4;
-    --border: #e3e6ec;
-    --border-strong: #cdd2dc;
+    /* Cooled and stepped down a notch so the cards sit in the same family as the
+       side panel. Every surface moved together, so cards stay lighter than the page. */
+    --bg: #e5e8f0;
+    --card: #f3f5f9;
+    --surface: #f3f5f9;
+    --surface-2: #edeff5;
+    --surface-3: #e0e4ed;
+    --border: #d7dce6;
+    --border-strong: #c0c7d6;
     --text: #12161f;
-    --muted: #6b7280;
-    --subtle: #99a1b0;
-    --accent: #2f5fe0;
-    --accent-hover: #2449b8;
-    --accent-soft: #ecf1ff;
-    --red: #d92d20;
-    --green: #0a9257;
+    /* Darker cards cost ~8% contrast, so the secondary inks step down to match:
+       muted clears AA again (4.43 -> 4.91) and subtle beats its old value on white. */
+    --muted: #646b79;
+    --subtle: #848c9c;
+    --accent: #2b57d2;
+    --accent-hover: #2246ac;
+    --accent-soft: #e4ebff;
+    --red: #cf2a1e;
+    --green: #088750;
     --radius: 12px;
     --radius-sm: 8px;
     --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
@@ -338,12 +342,12 @@ HTML_TEMPLATE = """\
     color-scheme: light;
   }
   :root[data-theme="dark"] {
-    --bg: #0e1015;
-    --card: #171a21;
-    --surface: #171a21;
-    --surface-2: #1d212a;
-    --surface-3: #262b36;
-    --border: #272c37;
+    --bg: #0b0d12;
+    --card: #14171f;
+    --surface: #14171f;
+    --surface-2: #191d25;
+    --surface-3: #222731;
+    --border: #242934;
     --border-strong: #3b4251;
     --text: #e6e9ef;
     --muted: #99a2b2;
