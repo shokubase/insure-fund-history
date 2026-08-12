@@ -782,6 +782,11 @@ HTML_TEMPLATE = """\
       <div class="filter-chips" id="taa-epdepth"></div>
       <span class="hint" style="margin:0;">이 낙폭 이상인 하락 이벤트를 "정말 팔았어야 했던 때"로 보고 채점</span>
     </div>
+    <div class="period-row">
+      <span class="period-label">신호 관찰</span>
+      <div class="filter-chips" id="taa-horizon"></div>
+      <span class="hint" style="margin:0;">매수·매도 신호 이후 이 기간의 수익률로 신호 품질을 잰다</span>
+    </div>
   </div>
 
   <div class="asset-filter" id="taa-period" style="display:none;">
@@ -2241,7 +2246,7 @@ const detailPeriod = makePeriodPicker({
 // 규칙: 기준가 > 이동평균 → 보유, 아니면 현금. 이동평균은 언제나 전체 이력으로 계산하고
 // 표시·백테스트 구간만 잘라낸다 — 구간 시작 200일치를 못 채워 신호가 비는 걸 막기 위해서다.
 
-const taaState = { win: 200, cadence: 'month', slope: true, buffer: 0, epDepth: -20 };
+const taaState = { win: 200, cadence: 'month', slope: true, buffer: 0, epDepth: -20, horizon: 60 };
 const taaCharts = {};
 
 // 매도 구간을 차트 배경에 칠한다. annotation 플러그인을 쓰지 않으려고 직접 그린다.
@@ -2428,6 +2433,31 @@ function taaScore(t, ep, ei) {
   };
 }
 
+// ── 매수·매도 신호 분리 채점 ────────────────────────────────────────
+// 신호의 가치는 절대 적중률이 아니라 기저율 대비 초과분이다. 주식은 60일 중 3분의 2가
+// 오르므로 "매수 후 64% 상승"은 기저(66%)보다 오히려 못한 성적이다. 그래서 신호 이후
+// 수익률 분포를 전체 기간 분포와 나란히 놓고 본다.
+function taaForward(t, si, ei, h) {
+  const lo = Math.max(si, t.firstValid);
+  const fwd = i => i + h <= ei ? (t.nav[i + h] / t.nav[i] - 1) * 100 : null;
+  const buy = [], sell = [], base = [];
+  for (let i = lo; i <= ei; i++) {
+    const v = fwd(i);
+    if (v == null) continue;
+    base.push(v);
+    if (i > lo && t.pos[i] !== t.pos[i - 1]) (t.pos[i] ? buy : sell).push(v);
+  }
+  return { buy, sell, base };
+}
+
+const taaQuant = (arr, q) => {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const p = (s.length - 1) * q / 100, lo = Math.floor(p), hi = Math.ceil(p);
+  return s[lo] + (s[hi] - s[lo]) * (p - lo);
+};
+const taaShare = (arr, fn) => arr.length ? arr.filter(fn).length / arr.length * 100 : null;
+
 const taaFmt = (v, d) => v == null || !isFinite(v) ? '—' : v.toFixed(d == null ? 2 : d);
 const taaSigned = (v, d) => v == null || !isFinite(v) ? '—'
   : `<span class="${v >= 0 ? 'positive' : 'negative'}">${v >= 0 ? '+' : ''}${v.toFixed(d == null ? 2 : d)}%</span>`;
@@ -2550,7 +2580,7 @@ function refreshTaa() {
   statusCard.style.display = '';
   box.innerHTML = '';
 
-  const rows = [], pending = [];
+  const rows = [], pending = [], pendingSig = [];
   usable.forEach(({ idx, t }) => {
     const n = t.dates.length;
     let si = Math.max(t.firstValid, 0), ei = n - 1;
@@ -2619,6 +2649,12 @@ function refreshTaa() {
 
       ${taaScoreCard(t, si, ei)}
 
+      <h4 class="taa-sub">매수 · 매도 신호 분리 채점 (이후 ${taaState.horizon}거래일)</h4>
+      <div id="${cid}-sig"></div>
+      <div class="chart-container" style="height:230px;"><canvas id="${cid}-q"></canvas></div>
+      <p class="hint">신호 이후 수익률의 분위 곡선. 회색 기저선보다 <b>아래</b>로 내려가면 매도 신호가,
+         <b>위</b>로 올라가면 매수 신호가 정보를 담고 있다는 뜻입니다. 겹치면 그 신호는 무작위와 다르지 않습니다.</p>
+
       <h4 class="taa-sub">최근 신호 ${closed.length ? `(종료된 ${closed.length}건 중 ${hits}건 적중 · ${(hits / closed.length * 100).toFixed(0)}%)` : ''}</h4>
       ${ev.length ? `<table style="font-size:.8rem;min-width:100%;">
         <tr><th>신호일</th><th>구분</th><th>기준가</th><th>이격도</th><th>기울기</th><th>지속</th><th>구간 등락</th><th>결과</th></tr>
@@ -2626,6 +2662,7 @@ function refreshTaa() {
     </section>`);
 
     pending.push({ cid, t, si, ei, color });
+    pendingSig.push({ cid, t, si, ei });
   });
 
   document.getElementById('taa-status').innerHTML = rows.length ? `
@@ -2636,6 +2673,64 @@ function refreshTaa() {
     </table>` : '<p class="fund-meta">선택 기간에 신호를 만들 데이터가 없습니다.</p>';
 
   pending.forEach(p => taaDrawCharts(p));
+  pendingSig.forEach(p => taaDrawSignalQuality(p));
+}
+
+function taaDrawSignalQuality({ cid, t, si, ei }) {
+  const h = taaState.horizon;
+  const { buy, sell, base } = taaForward(t, si, ei, h);
+  const el = document.getElementById(cid + '-sig');
+  if (!el) return;
+  if (!buy.length && !sell.length) { el.innerHTML = '<p class="fund-meta">이 기간에 신호가 없습니다.</p>'; return; }
+
+  const bUp = taaShare(buy, v => v > 0), sDn = taaShare(sell, v => v < 0);
+  const zUp = taaShare(base, v => v > 0), zDn = taaShare(base, v => v < 0);
+  const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const lift = (v, z) => v == null || z == null ? '—'
+    : `<span class="${v - z >= 0 ? 'positive' : 'negative'}">${v - z >= 0 ? '+' : ''}${(v - z).toFixed(0)}%p</span>`;
+  const small = Math.min(buy.length, sell.length) < 20;
+
+  el.innerHTML = `<table style="font-size:.8rem;min-width:100%;">
+      <tr><th>신호</th><th>횟수</th><th>방향 적중률</th><th>기저율</th><th>초과</th><th>이후 평균</th><th>기저 평균</th></tr>
+      <tr><td>매수 <span class="row-note">이후 상승했나</span></td><td>${buy.length}</td>
+          <td>${taaFmt(bUp, 0)}%</td><td>${taaFmt(zUp, 0)}%</td><td><b>${lift(bUp, zUp)}</b></td>
+          <td>${taaSigned(mean(buy), 1)}</td><td>${taaSigned(mean(base), 1)}</td></tr>
+      <tr><td>매도 <span class="row-note">이후 하락했나</span></td><td>${sell.length}</td>
+          <td>${taaFmt(sDn, 0)}%</td><td>${taaFmt(zDn, 0)}%</td><td><b>${lift(sDn, zDn)}</b></td>
+          <td>${taaSigned(mean(sell), 1)}</td><td>${taaSigned(mean(base), 1)}</td></tr>
+    </table>
+    ${small ? '<p class="hint">신호 표본이 20회 미만이라 분위 곡선의 꼬리는 흔들립니다. 추세만 보세요.</p>' : ''}`;
+
+  const QS = [5, 10, 25, 50, 75, 90, 95];
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#888';
+  const line = (label, arr, color, dash) => ({
+    label, data: QS.map(q => { const v = taaQuant(arr, q); return v == null ? null : +v.toFixed(2); }),
+    borderColor: color, backgroundColor: 'transparent', borderDash: dash || [],
+    fill: false, pointRadius: 2.5, borderWidth: 1.7,
+  });
+
+  taaCharts[cid + '-q'] = new Chart(document.getElementById(cid + '-q'), {
+    type: 'line',
+    data: {
+      labels: QS.map(q => q + '%'),
+      datasets: [
+        line(`기저 (전체 ${base.length}일)`, base, muted, [5, 4]),
+        line(`매수 신호 후 (${buy.length}회)`, buy, 'var(--green)'.replace('var(--green)',
+          getComputedStyle(document.documentElement).getPropertyValue('--green').trim() || '#16a34a')),
+        line(`매도 신호 후 (${sell.length}회)`, sell,
+          getComputedStyle(document.documentElement).getPropertyValue('--red').trim() || '#ef4444'),
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { title: { display: true, text: '분위 (낮을수록 나쁜 시나리오)', font: { size: 10 } } },
+        y: { title: { display: true, text: `이후 ${h}일 수익률 %`, font: { size: 10 } },
+             grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.55)' : 'rgba(128,128,128,.12)' } },
+      },
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 10 } } } },
+    },
+  });
 }
 
 function taaDrawCharts({ cid, t, si, ei, color }) {
@@ -2728,6 +2823,8 @@ taaChips('taa-buffer', [0, 1, 2, 3].map(v => ({ v, label: v ? `±${v}%` : '없�
   v => taaState.buffer = +v);
 taaChips('taa-epdepth', [-10, -15, -20, -30].map(v => ({ v, label: `${v}%`, on: v === -20 })),
   v => taaState.epDepth = +v);
+taaChips('taa-horizon', [20, 60, 120, 250].map(v => ({ v, label: `${v}일`, on: v === 60 })),
+  v => taaState.horizon = +v);
 
 function toggleFundView(btn) {
   const group = btn.parentElement.dataset.group;
