@@ -62,9 +62,15 @@ def compute_basic_metrics(nav: pd.Series, risk_free: float) -> dict:
     nav_first, nav_last = nav.iloc[0], nav.iloc[-1]
     cagr = (nav_last / nav_first) ** (1 / total_years) - 1
 
-    daily_returns = nav.pct_change().dropna()
-    annual_factor = len(daily_returns) / total_years
-    vol = daily_returns.std() * sqrt(annual_factor)
+    # 월간 기준. 보험펀드 기준가는 기초자산을 1~3일 늦게, 그것도 평활된 형태로
+    # 반영해서 일간 변동성이 실제보다 눌린다 (N1M0: 일간 15.7% vs 월간 21.0%).
+    # 월간으로 집계하면 그 잡음이 씻겨나가고, 지수·ETF 와도 같은 잣대가 된다.
+    monthly_returns = nav.resample("ME").last().dropna().pct_change().dropna()
+    if len(monthly_returns) >= 6:
+        vol = monthly_returns.std() * sqrt(12)
+    else:
+        daily_returns = nav.pct_change().dropna()
+        vol = daily_returns.std() * sqrt(len(daily_returns) / total_years)
 
     sharpe = (cagr - risk_free) / vol if vol > 0 else 0.0
 
@@ -1370,13 +1376,16 @@ function renderComparisonSummary(selected, dates, navSets) {
     const totalReturn = (nav[n-1] / nav[0] - 1) * 100;
     const cagr = (Math.pow(nav[n-1] / nav[0], 1 / totalYears) - 1) * 100;
 
-    // Volatility (from common period)
-    const dr = [];
-    for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i-1] - 1);
-    const mean = dr.reduce((s,v) => s+v, 0) / dr.length;
-    const variance = dr.reduce((s,v) => s + (v-mean)**2, 0) / (dr.length - 1);
-    const af = dr.length / totalYears;
-    const vol = Math.sqrt(variance) * Math.sqrt(af) * 100;
+    // Volatility (monthly basis over the shown window)
+    let volRaw = monthlyVol(dates, nav);
+    if (volRaw === null) {
+      const dr = [];
+      for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i-1] - 1);
+      const mean = dr.reduce((s,v) => s+v, 0) / dr.length;
+      const variance = dr.reduce((s,v) => s + (v-mean)**2, 0) / (dr.length - 1);
+      volRaw = Math.sqrt(variance) * Math.sqrt(dr.length / totalYears);
+    }
+    const vol = volRaw * 100;
 
     // MDD
     let peak = nav[0], mdd = 0;
@@ -1445,7 +1454,7 @@ function renderComparisonSummary(selected, dates, navSets) {
   });
   rows += '</tr>';
   // Row: Volatility
-  rows += '<tr><td>변동성</td>';
+  rows += '<tr><td>변동성<span class="row-note">월간 기준, 연환산</span></td>';
   metrics.forEach(m => { rows += `<td>${m.vol.toFixed(2)}%</td>`; });
   rows += '</tr>';
   // Row: MDD
@@ -1812,11 +1821,14 @@ function attachDragSelect(canvasId, overlayId, statsId, chartRef, fullDatesOrFn,
     const totalYears = totalDays / 365.25;
     const totalReturn = ((nav[n-1]/nav[0]-1)*100).toFixed(2);
     const cagr = totalYears > 0 ? ((Math.pow(nav[n-1]/nav[0],1/totalYears)-1)*100).toFixed(2) : '-';
-    const dr = []; for (let i=1;i<n;i++) dr.push(nav[i]/nav[i-1]-1);
-    const mean = dr.reduce((s,v)=>s+v,0)/dr.length;
-    const vari = dr.reduce((s,v)=>s+(v-mean)**2,0)/(dr.length-1);
-    const af = totalYears > 0 ? dr.length/totalYears : 252;
-    const vol = (Math.sqrt(vari)*Math.sqrt(af)*100).toFixed(2);
+    let volRaw = monthlyVol(dates, nav);
+    if (volRaw === null) {
+      const dr = []; for (let i=1;i<n;i++) dr.push(nav[i]/nav[i-1]-1);
+      const mean = dr.reduce((s,v)=>s+v,0)/dr.length;
+      const vari = dr.reduce((s,v)=>s+(v-mean)**2,0)/(dr.length-1);
+      volRaw = Math.sqrt(vari)*Math.sqrt(totalYears > 0 ? dr.length/totalYears : 252);
+    }
+    const vol = (volRaw*100).toFixed(2);
     let peak = nav[0], mdd = 0;
     for (const v of nav) { peak = Math.max(peak,v); mdd = Math.min(mdd,(v-peak)/peak); }
     const pc = v => +v>0?'positive':+v<0?'negative':'';
@@ -1824,7 +1836,7 @@ function attachDragSelect(canvasId, overlayId, statsId, chartRef, fullDatesOrFn,
       `<div style="font-weight:600;margin-bottom:0.3rem;">${dates[0]} ~ ${dates[n-1]}</div>`+
       `<div>수익률: <b class="${pc(totalReturn)}">${+totalReturn>0?'+':''}${totalReturn}%</b></div>`+
       `<div>CAGR: <b class="${pc(cagr)}">${+cagr>0?'+':''}${cagr}%</b></div>`+
-      `<div>변동성: <b>${vol}%</b></div>`+
+      `<div>변동성(월간): <b>${vol}%</b></div>`+
       `<div>MDD: <b class="negative">${(mdd*100).toFixed(2)}%</b></div>`;
     statsBox.style.display = 'block';
   }
@@ -2010,7 +2022,7 @@ function paintVariantRanged(idx, v) {
     <div class="metric-card"><div class="label">기간</div><div class="value">${m.totalYears}년</div></div>
     <div class="metric-card"><div class="label">총 수익률</div><div class="value ${pctCls(m.totalReturn)}">${fmtPct(m.totalReturn, true)}</div></div>
     <div class="metric-card"><div class="label">CAGR</div>${annualisable ? `<div class="value ${pctCls(m.cagr)}">${fmtPct(m.cagr, true)}</div>` : dash}</div>
-    <div class="metric-card"><div class="label">변동성</div><div class="value">${m.volatility}%</div></div>
+    <div class="metric-card"><div class="label">변동성 (월간)</div><div class="value">${m.volatility}%</div></div>
     <div class="metric-card"><div class="label">샤프비율</div>${annualisable ? `<div class="value">${m.sharpe}</div>` : dash}</div>
     <div class="metric-card"><div class="label">MDD</div><div class="value negative">${m.mdd}%</div></div>
     <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-${avgDd}%</div></div>
@@ -2287,6 +2299,23 @@ function buildPortfolio(selections) {
 }
 
 // Metrics calculation (mirrors Python)
+// Annualised volatility on a MONTHLY basis.
+// Insurance-fund NAV reflects its holdings 1-3 days late and smoothed, which crushes
+// daily volatility (N1M0: 15.7% daily vs 21.0% monthly) and makes a blend with an ETF
+// look less risky than either leg. Monthly aggregation washes that out with no
+// lag model to guess at, and puts funds and ETFs on one yardstick.
+function monthlyVol(dates, nav) {
+  const last = {};
+  dates.forEach((d, i) => { last[d.slice(0, 7)] = nav[i]; });
+  const vals = Object.keys(last).sort().map(k => last[k]);
+  if (vals.length < 7) return null;   // need 6+ returns
+  const r = [];
+  for (let i = 1; i < vals.length; i++) r.push(vals[i] / vals[i - 1] - 1);
+  const m = r.reduce((s, v) => s + v, 0) / r.length;
+  const varr = r.reduce((s, v) => s + (v - m) ** 2, 0) / (r.length - 1);
+  return Math.sqrt(varr) * Math.sqrt(12);
+}
+
 function calcMetrics(dates, nav) {
   const n = nav.length;
   const firstDate = new Date(dates[0]);
@@ -2297,13 +2326,14 @@ function calcMetrics(dates, nav) {
   const totalReturn = (nav[n - 1] / nav[0] - 1) * 100;
   const cagr = (Math.pow(nav[n - 1] / nav[0], 1 / totalYears) - 1);
 
-  // Daily returns (from NAV)
-  const dr = [];
-  for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i - 1] - 1);
-  const mean = dr.reduce((s, v) => s + v, 0) / dr.length;
-  const variance = dr.reduce((s, v) => s + (v - mean) ** 2, 0) / (dr.length - 1);
-  const annualFactor = dr.length / totalYears;
-  const vol = Math.sqrt(variance) * Math.sqrt(annualFactor);
+  let vol = monthlyVol(dates, nav);
+  if (vol === null) {
+    const dr = [];
+    for (let i = 1; i < n; i++) dr.push(nav[i] / nav[i - 1] - 1);
+    const mean = dr.reduce((s, v) => s + v, 0) / dr.length;
+    const variance = dr.reduce((s, v) => s + (v - mean) ** 2, 0) / (dr.length - 1);
+    vol = Math.sqrt(variance) * Math.sqrt(dr.length / totalYears);
+  }
   const sharpe = vol > 0 ? (cagr - RISK_FREE) / vol : 0;
 
   // Drawdown series
@@ -2516,17 +2546,16 @@ function renderPortfolio(pf) {
   const m = calcMetrics(pf.dates, pf.nav);
   if (!m) return;
 
-  // 보험펀드 기준가는 시장보다 하루 늦게 반영된다 (N1M0 vs KS200TR: 동일일 상관 -0.10,
-  // 1일 지연 상관 0.49). 누적 수익률은 멀쩡하지만, 지연된 계열과 지연되지 않은 계열을
-  // 섞으면 일간 분산이 상쇄돼 변동성·샤프가 실제보다 좋게 나온다.
+  // 변동성·샤프는 monthlyVol 로 옮겨서 기준가 지연·평활 문제를 피했다. 남는 것은
+  // 일간에서 뽑는 MDD·하락 이벤트뿐이라, 보험펀드가 섞이면 그 점만 알린다.
   const sel = getSelections();
-  const mixesLag = sel.some(x => !FUNDS[x.idx].isBench) && sel.some(x => FUNDS[x.idx].isBench);
+  const hasFund = sel.some(x => !FUNDS[x.idx].isBench);
   const lagNote = document.getElementById('pf-lag-note');
-  lagNote.style.display = mixesLag ? '' : 'none';
-  lagNote.innerHTML = mixesLag
-    ? '⚠ 보험펀드 기준가는 시장 종가를 하루 늦게 반영합니다. 보험펀드와 ETF·지수를 함께 담으면 ' +
-      '일간 수익률의 시점이 어긋나 <b>변동성·샤프비율이 실제보다 좋게</b> 나옵니다 ' +
-      '(분산 효과처럼 보이는 착시). 총 수익률·CAGR·연도별 수익률은 영향받지 않습니다.'
+  lagNote.style.display = hasFund ? '' : 'none';
+  lagNote.innerHTML = hasFund
+    ? '변동성·샤프비율은 월간 기준이라 기준가 지연·평활의 영향을 받지 않습니다. 다만 ' +
+      '<b>MDD와 하락 이벤트는 일간 기준</b>이라, 평활된 보험펀드 기준가에서는 실제 낙폭보다 ' +
+      '얕게 나올 수 있습니다.'
     : '';
 
   const events = findDrawdowns(pf.dates, pf.nav, 5);
@@ -2551,7 +2580,7 @@ function renderPortfolio(pf) {
     <div class="metric-card"><div class="label">기간</div><div class="value">${m.totalYears}년</div></div>
     <div class="metric-card"><div class="label">총 수익률</div><div class="value ${pctCls(m.totalReturn)}">${fmtPct(m.totalReturn, true)}</div></div>
     <div class="metric-card"><div class="label">CAGR</div><div class="value ${pctCls(m.cagr)}">${fmtPct(m.cagr, true)}</div></div>
-    <div class="metric-card"><div class="label">변동성</div><div class="value">${m.volatility}%</div></div>
+    <div class="metric-card"><div class="label">변동성 (월간)</div><div class="value">${m.volatility}%</div></div>
     <div class="metric-card"><div class="label">샤프비율</div><div class="value">${m.sharpe}</div></div>
     <div class="metric-card"><div class="label">MDD</div><div class="value negative">${m.mdd}%</div></div>
     <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-${avgDd}%</div></div>
@@ -2986,7 +3015,7 @@ def _render_analysis_block(data: dict, canvas_id_prefix: str) -> str:
       <div class="metric-card"><div class="label">기간</div><div class="value">{b['total_years']}년</div></div>
       <div class="metric-card"><div class="label">총 수익률</div><div class="value {_pct_class(b['total_return'])}">{_fmt_pct(b['total_return'])}</div></div>
       <div class="metric-card"><div class="label">CAGR</div><div class="value {_pct_class(b['cagr'])}">{_fmt_pct(b['cagr'])}</div></div>
-      <div class="metric-card"><div class="label">변동성</div><div class="value">{b['volatility']:.2f}%</div></div>
+      <div class="metric-card"><div class="label">변동성 (월간)</div><div class="value">{b['volatility']:.2f}%</div></div>
       <div class="metric-card"><div class="label">샤프비율</div><div class="value">{b['sharpe']:.2f}</div></div>
       <div class="metric-card"><div class="label">MDD</div><div class="value negative">{_fmt_pct(b['mdd'], False)}</div></div>
       <div class="metric-card"><div class="label">평균 하락폭</div><div class="value negative">-{ds['avg_drawdown']:.2f}%</div></div>
