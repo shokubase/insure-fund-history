@@ -925,6 +925,8 @@ HTML_TEMPLATE = """\
       <p class="hint">NAV 차트에서 드래그하여 구간 분석 (클릭하면 해제)</p>
       <div id="pf-yearly"></div>
       <div id="pf-trailing"></div>
+      <div id="pf-mu"></div>
+      <div id="pf-regime"></div>
       <div id="pf-loo"></div>
       <div id="pf-dd-table"></div>
       <div id="pf-ls-table"></div>
@@ -3517,6 +3519,200 @@ function renderLeaveOneOut(selections) {
       음수면 그 자산이 기여하고 있었다는 뜻입니다.</p>`;
 }
 
+// ── Regime stress test ──────────────────────────────────────────────
+// Picking the next regime is not something the data supports, but running the
+// current weights through the regimes that already happened needs no forecast.
+// Dates are peak→trough for the stress legs, trough→end for the recoveries.
+const REGIME_EPISODES = [
+  { from:'2000-03-24', to:'2002-10-09', name:'닷컴 붕괴',      cls:'성장↓ 인플레↓',   kind:'stress' },
+  { from:'2007-10-09', to:'2009-03-09', name:'금융위기',        cls:'성장↓↓ 인플레↓',  kind:'stress' },
+  { from:'2011-04-29', to:'2011-10-03', name:'유럽 재정위기',   cls:'성장↓',            kind:'stress' },
+  { from:'2013-05-21', to:'2013-09-05', name:'테이퍼 탠트럼',   cls:'금리↑ 단독',       kind:'stress' },
+  { from:'2015-05-21', to:'2016-02-11', name:'중국·유가 충격',  cls:'성장↓ 인플레↓',   kind:'stress' },
+  { from:'2020-02-19', to:'2020-03-23', name:'COVID 급락',      cls:'성장↓↓',          kind:'stress' },
+  { from:'2022-01-03', to:'2022-10-12', name:'인플레 충격',     cls:'성장↓ 인플레↑↑',  kind:'stress' },
+  { from:'2020-03-23', to:'2021-12-31', name:'유동성 랠리',     cls:'성장↑ 인플레↑',   kind:'recover' },
+  { from:'2022-10-12', to:'2026-08-11', name:'디스인플레 회복', cls:'성장↑ 인플레↓',   kind:'recover' },
+];
+
+// buildPortfolio() clips to the user's period picker; a stress test has to ignore
+// that and use the episode's own window instead.
+function portfolioOverRange(selections, from, to) {
+  const daily = selections.map(s => getPfFundData(FUNDS[s.idx], s.idx, 'daily'));
+  if (daily.some(d => !d || !d.dates.length)) return null;
+  const missing = selections
+    .map((s, i) => (daily[i].dates[0] > from || daily[i].dates[daily[i].dates.length - 1] < to)
+      ? (FUNDS[s.idx].shortName || FUNDS[s.idx].name) : null)
+    .filter(Boolean);
+  if (missing.length) return { missing };
+
+  const sets = daily.map(d => new Set(d.dates));
+  const dates = [...sets[0]].filter(d => d >= from && d <= to && sets.every(s => s.has(d))).sort();
+  if (dates.length < 2) return { missing: ['공통 거래일'] };
+
+  const segs = daily.map(d => segmentReturns(d, dates));
+  let pf = 1;
+  for (let i = 1; i < dates.length; i++) {
+    let r = 0;
+    selections.forEach((s, si) => { r += segs[si][i] * s.weight; });
+    pf *= (1 + r);
+  }
+  const legs = segs.map(seg => {
+    let v = 1;
+    for (let i = 1; i < seg.length; i++) v *= (1 + seg[i]);
+    return (v - 1) * 100;
+  });
+  return { total: (pf - 1) * 100, legs };
+}
+
+function renderRegimeScenarios(selections) {
+  const el = document.getElementById('pf-regime');
+  if (!el) return;
+  if (!selections.length) { el.innerHTML = ''; return; }
+
+  const names = selections.map(s => FUNDS[s.idx].shortName || FUNDS[s.idx].name);
+  const rows = REGIME_EPISODES.map(ep => ({ ep, res: portfolioOverRange(selections, ep.from, ep.to) }));
+  if (rows.every(r => !r.res || r.res.missing)) {
+    const lim = rows.map(r => r.res && r.res.missing).filter(Boolean).flat();
+    el.innerHTML = '<h3>레짐 스트레스 테스트</h3><p class="fund-meta">선택한 자산의 이력이 짧아 재현할 국면이 없습니다'
+      + (lim.length ? ` (제약: ${[...new Set(lim)].join(', ')})` : '') + '.</p>';
+    return;
+  }
+
+  const cls = v => v > 0 ? 'positive' : v < 0 ? 'negative' : '';
+  const fp = v => (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const body = rows.map(({ ep, res }) => {
+    const head = `<td>${ep.name}<span class="row-note">${ep.from.slice(0,7)} ~ ${ep.to.slice(0,7)}</span></td>`
+               + `<td><span class="row-note" style="display:inline;">${ep.cls}</span></td>`;
+    if (!res || res.missing) {
+      return `<tr style="opacity:.5;">${head}<td colspan="${names.length + 1}">데이터 없음`
+           + `<span class="row-note">${[...new Set(res ? res.missing : [])].join(', ')} 이력 부족</span></td></tr>`;
+    }
+    return `<tr${ep.kind === 'recover' ? ' style="opacity:.72;"' : ''}>${head}`
+      + `<td class="${cls(res.total)}"><b>${fp(res.total)}</b></td>`
+      + res.legs.map(v => `<td class="${cls(v)}">${fp(v)}</td>`).join('') + '</tr>';
+  }).join('');
+
+  const live = rows.filter(r => r.res && !r.res.missing && r.ep.kind === 'stress');
+  const worst = live.reduce((a, b) => (!a || b.res.total < a.res.total) ? b : a, null);
+  // The interesting question is not the worst number but whether any regime knocked
+  // every leg down at once — that is the one shape diversification cannot absorb.
+  const allDown = live.filter(r => r.res.legs.every(v => v < 0));
+  const skipped = rows.filter(r => !r.res || r.res.missing).length;
+
+  el.innerHTML = `
+    <h3>레짐 스트레스 테스트</h3>
+    <p class="fund-meta" style="margin:0 0 .6rem;">현재 비중을 <b>이미 일어난 국면</b>에 그대로 통과시킵니다.
+      다음 레짐을 맞힐 필요가 없다는 것이 이 방식의 장점입니다. 아래 흐린 두 줄은 회복 국면입니다.</p>
+    <table>
+      <thead><tr><th>국면</th><th>분류</th><th>포트폴리오</th>${names.map(n => `<th>${n}</th>`).join('')}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    ${worst ? `<p class="hint">최악 국면은 <b>${worst.ep.name}</b> ${fp(worst.res.total)}.
+      ${allDown.length
+        ? `재현한 ${live.length}개 국면 중 <b>${allDown.length}개`
+          + `(${allDown.slice(0, 3).map(r => r.ep.name).join(' · ')}`
+          + `${allDown.length > 3 ? ` 외 ${allDown.length - 3}개` : ''})</b>에서 선택한 자산이 전부 하락했습니다. `
+          + '분산이 흡수하지 못하는 형태입니다.'
+        : `재현한 ${live.length}개 국면 모두에서 최소 한 자산이 버텨줬습니다. `
+          + '다만 이는 재현된 국면에 한한 이야기입니다.'}
+      ${skipped ? `재현하지 못한 국면 ${skipped}개는 표에 표시했습니다.` : ''}</p>` : ''}`;
+}
+
+// ── Expected-return scenario band ───────────────────────────────────
+// The realised CAGR is one draw, not the truth. SE(mu) = sigma/sqrt(span in YEARS)
+// and does not shrink with more frequent sampling, so the band below is the honest
+// width of what this history can say — before any forecasting is attempted.
+let muHorizon = 30, muMode = 'monthly';
+
+function renderMuScenarios(pf) {
+  const el = document.getElementById('pf-mu');
+  if (!el || !pf) return;
+  const m = calcMetrics(pf.dates, pf.nav);
+  if (!m) { el.innerHTML = ''; return; }
+
+  const spanYears = +m.totalYears;
+  const sigma = +m.volatility;                 // annualised, monthly-based
+  const center = +m.cagr;
+  const seMu = sigma / Math.sqrt(spanYears);
+  const lo = center - 1.96 * seMu, hi = center + 1.96 * seMu;
+
+  // Box-Muller; one shared normal draw generator for all scenarios.
+  let spare = null;
+  const gauss = () => {
+    if (spare !== null) { const v = spare; spare = null; return v; }
+    let u, v, s;
+    do { u = Math.random() * 2 - 1; v = Math.random() * 2 - 1; s = u * u + v * v; }
+    while (s === 0 || s >= 1);
+    const f = Math.sqrt(-2 * Math.log(s) / s);
+    spare = v * f;
+    return u * f;
+  };
+
+  const PATHS = 3000;
+  function simulate(muPct) {
+    const n = muHorizon * 12;
+    const mm = Math.log1p(muPct / 100) / 12, ms = sigma / 100 / Math.sqrt(12);
+    const out = new Float64Array(PATHS);
+    for (let p = 0; p < PATHS; p++) {
+      let w = muMode === 'lump' ? 1 : 0;
+      for (let t = 0; t < n; t++) {
+        const r = Math.exp(mm - 0.5 * ms * ms + ms * gauss()) - 1;
+        w = muMode === 'lump' ? w * (1 + r) : (w + 1) * (1 + r);
+      }
+      out[p] = muMode === 'lump' ? w : w / n;   // 납입총액 대비 배수
+    }
+    out.sort();
+    const q = f => out[Math.floor(PATHS * f)];
+    return { p5: q(0.05), p50: q(0.50), p95: q(0.95) };
+  }
+
+  const scen = [
+    { lab: '하한', sub: '95% 구간 아래끝', mu: lo },
+    { lab: '중심', sub: '실현 CAGR',       mu: center },
+    { lab: '상한', sub: '95% 구간 위끝',   mu: hi },
+  ].map(s => ({ ...s, ...simulate(s.mu) }));
+
+  const chip = (v, cur, ds, txt) =>
+    `<label class="filter-chip${v === cur ? ' active' : ''}" data-${ds}="${v}">${txt}</label>`;
+  const unit = muMode === 'lump' ? '배' : '배';
+  const ratio = (scen[2].p50 / scen[0].p50);
+
+  el.innerHTML = `
+    <h3>기대수익률 시나리오 밴드</h3>
+    <p class="fund-meta" style="margin:0 0 .8rem;">실현 CAGR <b>${center.toFixed(2)}%</b>는 하나의 관측일 뿐입니다.
+      변동성 ${sigma.toFixed(1)}% · 표본 ${spanYears}년이면 기대수익률의 표준오차는
+      <b>±${seMu.toFixed(2)}%p</b>, 95% 구간은 <b>${lo.toFixed(2)}% ~ ${hi.toFixed(2)}%</b>입니다.
+      아래는 그 세 값 각각에서 몬테카를로로 굴린 결과입니다.</p>
+    <div class="filter-chips" id="mu-horizon" style="margin-bottom:.5rem;">
+      ${[10,20,30].map(y => chip(y, muHorizon, 'years', y + '년')).join('')}
+    </div>
+    <div class="filter-chips" id="mu-mode" style="margin-bottom:1rem;">
+      ${chip('monthly', muMode, 'mode', '매월 적립')}${chip('lump', muMode, 'mode', '일시납')}
+    </div>
+    <table>
+      <thead><tr><th>시나리오</th><th>가정 μ</th><th>하위 5%</th><th>중앙</th><th>상위 5%</th></tr></thead>
+      <tbody>${scen.map((s, i) => `
+        <tr${i === 1 ? ' style="background:var(--surface-2);"' : ''}>
+          <td><b>${s.lab}</b><span class="row-note">${s.sub}</span></td>
+          <td>${s.mu.toFixed(2)}%</td>
+          <td class="${s.p5 < 1 ? 'negative' : ''}">${s.p5.toFixed(2)}${unit}</td>
+          <td><b>${s.p50.toFixed(2)}${unit}</b></td>
+          <td>${s.p95.toFixed(2)}${unit}</td>
+        </tr>`).join('')}</tbody>
+    </table>
+    <p class="hint">${muMode === 'monthly'
+      ? '매월 적립은 <b>납입총액 대비</b> 배수입니다. 돈의 평균 투자기간이 명목 기간의 절반쯤이라 일시납보다 낮게 나옵니다.'
+      : '일시납은 최초 원금 대비 배수입니다.'}
+      하한과 상한의 중앙값 차이가 <b>${ratio.toFixed(1)}배</b> — 같은 데이터에서 나온 두 답의 간극입니다.
+      이 폭은 예측을 더 잘해서 줄일 수 있는 것이 아니라, 계획이 감당해야 하는 크기입니다.</p>`;
+
+  el.querySelectorAll('#mu-horizon .filter-chip').forEach(c =>
+    c.addEventListener('click', () => { muHorizon = +c.dataset.years; renderMuScenarios(pf); }));
+  el.querySelectorAll('#mu-mode .filter-chip').forEach(c =>
+    c.addEventListener('click', () => { muMode = c.dataset.mode; renderMuScenarios(pf); }));
+}
+
 // Render portfolio results
 let pfNavChart = null, pfDdChart = null;
 let pfFullDates = [], pfFullNav = []; // full (non-downsampled) data for selection analysis
@@ -3975,6 +4171,8 @@ function runPortfolioAnalysis() {
   warn.style.display = 'none';
   renderPortfolio(pf);
   renderYearlyBreakdown(sel, pf);
+  renderMuScenarios(pf);
+  renderRegimeScenarios(sel);
   renderLeaveOneOut(sel);
   renderCorrelation(sel);
   clearSelection();
