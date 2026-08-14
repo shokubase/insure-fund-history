@@ -2054,11 +2054,12 @@ function initFundTrailing(prefix, dailyData) {
     const avg = returns.reduce((s,v)=>s+v,0)/returns.length;
     const vari = returns.reduce((s,v)=>s+(v-avg)**2,0)/(returns.length-1);
     const std = Math.sqrt(vari);
-    // Overlapping daily windows are not independent draws — see the portfolio-side
-    // note in renderTrailingReturns.
+    // Overlapping daily windows are not independent draws, and `std` is itself pushed
+    // down by that overlap at long horizons — see the note in renderTrailingReturns.
     const spanYears = (new Date(dates[n-1]) - new Date(dates[0])) / (365.25*86400000);
     const nEff = Math.max(1, spanYears / wy);
-    const se = std/Math.sqrt(nEff);
+    const annVol = monthlyVol(dates, nav);
+    const se = annVol === null ? std/Math.sqrt(nEff) : annVol*100/Math.sqrt(spanYears);
     const sorted = [...returns].sort((a,b)=>a-b);
     const qtl = p => { const t=(sorted.length-1)*p, lo=Math.floor(t), hi=Math.ceil(t);
                        return sorted[lo] + (sorted[hi]-sorted[lo])*(t-lo); };
@@ -2073,11 +2074,11 @@ function initFundTrailing(prefix, dailyData) {
     const fp = (v,s) => (s&&v>0?'+':'')+v.toFixed(2)+'%';
 
     document.getElementById('tr-metrics-'+uid).innerHTML = `
-      <div class="metric-card"><div class="label">관측수<span class="row-note">중첩 창</span></div><div class="value">${returns.length}</div></div>
+      <div class="metric-card"><div class="label">관측수<span class="row-note">중첩 창 · 비중첩 ${nEff.toFixed(1)}개</span></div><div class="value">${returns.length}</div></div>
       <div class="metric-card"><div class="label">평균 CAGR</div><div class="value ${pc(avg)}">${fp(avg,1)}</div></div>
       <div class="metric-card"><div class="label">중앙값</div><div class="value ${pc(median)}">${fp(median,1)}</div></div>
-      <div class="metric-card"><div class="label">표준편차</div><div class="value">${std.toFixed(2)}%</div></div>
-      <div class="metric-card"><div class="label">표준오차<span class="row-note">비중첩 ${nEff.toFixed(1)}개 기준</span></div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">표준편차<span class="row-note">이 창들의 흩어짐</span></div><div class="value">${std.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">μ의 표준오차<span class="row-note">표본 ${spanYears.toFixed(1)}년 · 창 무관</span></div><div class="value">±${se.toFixed(2)}%</div></div>
       <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate>50?'positive':'negative'}">${winTxt}</div></div>
       <div class="metric-card"><div class="label">최소</div><div class="value ${pc(min)}">${fp(min,1)}</div></div>
       <div class="metric-card"><div class="label">최대</div><div class="value ${pc(max)}">${fp(max,1)}</div></div>
@@ -3357,10 +3358,15 @@ function renderTrailingReturns(dates, nav) {
     const variance = returns.reduce((s,v) => s + (v-avg)**2, 0) / (returns.length - 1);
     const std = Math.sqrt(variance);
     // Daily windows overlap almost entirely, so returns.length is nowhere near the
-    // independent sample — only span/window non-overlapping windows exist. Dividing
-    // by returns.length made a 22-year record look accurate to ±0.04%p.
+    // independent sample — only span/window non-overlapping windows exist.
     const nEff = Math.max(1, totalYears / windowYears);
-    const se = std / Math.sqrt(nEff);
+    // SE of the expected return must not be derived from `std`: overlapping windows
+    // push long-horizon dispersion downward (10Y std came out 1.15% when the random-
+    // walk baseline for this span is ~2.1%), so std/sqrt(nEff) shrinks with window
+    // and implies μ is pinned to ±0.76%p. μ is one number and its precision is
+    // sigma_annual/sqrt(span) — identical on every card, which is the point.
+    const annVol = monthlyVol(dates, nav);
+    const se = annVol === null ? std / Math.sqrt(nEff) : annVol * 100 / Math.sqrt(totalYears);
     const sorted = [...returns].sort((a,b) => a-b);
     const qtl = p => { const t = (sorted.length - 1) * p, lo = Math.floor(t), hi = Math.ceil(t);
                        return sorted[lo] + (sorted[hi] - sorted[lo]) * (t - lo); };
@@ -3377,11 +3383,11 @@ function renderTrailingReturns(dates, nav) {
     const fmtPct = (v, sign) => (sign && v > 0 ? '+' : '') + v.toFixed(2) + '%';
 
     document.getElementById('trailing-metrics').innerHTML = `
-      <div class="metric-card"><div class="label">관측수<span class="row-note">중첩 창</span></div><div class="value">${returns.length}</div></div>
+      <div class="metric-card"><div class="label">관측수<span class="row-note">중첩 창 · 비중첩 ${nEff.toFixed(1)}개</span></div><div class="value">${returns.length}</div></div>
       <div class="metric-card"><div class="label">평균 CAGR</div><div class="value ${pctCls(avg)}">${fmtPct(avg, true)}</div></div>
       <div class="metric-card"><div class="label">중앙값</div><div class="value ${pctCls(median)}">${fmtPct(median, true)}</div></div>
-      <div class="metric-card"><div class="label">표준편차</div><div class="value">${std.toFixed(2)}%</div></div>
-      <div class="metric-card"><div class="label">표준오차<span class="row-note">비중첩 ${nEff.toFixed(1)}개 기준</span></div><div class="value">${se.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">표준편차<span class="row-note">이 창들의 흩어짐</span></div><div class="value">${std.toFixed(2)}%</div></div>
+      <div class="metric-card"><div class="label">μ의 표준오차<span class="row-note">표본 ${totalYears.toFixed(1)}년 · 창 무관</span></div><div class="value">±${se.toFixed(2)}%</div></div>
       <div class="metric-card"><div class="label">양수 비율</div><div class="value ${winRate > 50 ? 'positive' : 'negative'}">${winTxt}</div></div>
       <div class="metric-card"><div class="label">최소</div><div class="value ${pctCls(min)}">${fmtPct(min, true)}</div></div>
       <div class="metric-card"><div class="label">최대</div><div class="value ${pctCls(max)}">${fmtPct(max, true)}</div></div>
